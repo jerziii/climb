@@ -10,6 +10,27 @@ coordinates you can put in your phone.
 
 Open `index.html` in a browser. That's it — no build, no install, no dependencies, no server.
 
+## Running it locally
+
+```bash
+git clone https://github.com/jerziii/climb.git
+cd climb
+```
+
+Then just open `index.html`. To use it on a phone on the same Wi-Fi:
+
+```bash
+python3 serve.py            # prints the URL to type into the phone
+python3 serve.py --https    # same, but the locate button works
+```
+
+Plain http over a LAN IP is not a "secure context", so browsers block geolocation
+and clipboard writes there — the ◎ button and *Copy coords* stay dead. `--https`
+mints a throwaway self-signed certificate for your current LAN address; the phone
+warns once (Advanced → Proceed) and then you get the you-are-here dot, which is
+the version worth having at the crag. Certificates land in `.certs/` and are
+gitignored. Standard library only, nothing to install.
+
 ## Workflow
 
 1. Pick **Satellite (Esri)** as the base map and zoom to the area.
