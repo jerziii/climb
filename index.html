@@ -1,0 +1,1044 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Petrohrad — topo overlay on a real map</title>
+<style>
+  :root{
+    --bg:#12141a; --panel:#191c24; --line:#2b303c; --ink:#e7eaf0; --dim:#98a0b3;
+    --accent:#f2a33c; --accent2:#5ac8fa; --ok:#54c98a; --bad:#e2564a;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--ink); overflow:hidden;
+    -webkit-text-size-adjust:100%;
+    user-select:none; -webkit-user-select:none;   /* map drags must not smear-select the UI */
+  }
+  #popup,input,textarea{user-select:text;-webkit-user-select:text}
+
+  /* ---------- map ---------- */
+  #map{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none;background:#0c0e12}
+  #map.dragging{cursor:grabbing}
+  #map.placing{cursor:crosshair}
+  .layer{position:absolute;inset:0;pointer-events:none}
+  #tiles img{position:absolute;user-select:none;-webkit-user-drag:none;image-rendering:auto}
+  #overlays img{position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;-webkit-user-drag:none}
+  #vector{overflow:visible}
+
+  /* markers */
+  .mk{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer}
+  .mk .dot{width:11px;height:11px;border-radius:50%;border:2px solid #0b0d11;box-shadow:0 0 0 1px rgba(255,255,255,.35)}
+  .mk .lbl{
+    position:absolute;left:11px;top:-7px;white-space:nowrap;font-size:11px;font-weight:600;
+    padding:1px 5px;border-radius:4px;background:rgba(10,12,16,.78);border:1px solid var(--line);
+  }
+  .mk.osm .dot{background:var(--accent2)}
+  .mk.pin .dot{background:var(--accent);width:13px;height:13px}
+  .mk.sector .dot{background:#c98ae0}
+  .mk.me .dot{background:#fff;box-shadow:0 0 0 6px rgba(90,200,250,.28)}
+  .mk.sel .lbl{border-color:var(--accent);color:var(--accent)}
+
+  /* corner handles for topo warping */
+  .handle{
+    position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;
+    background:rgba(242,163,60,.28);border:2px solid var(--accent);pointer-events:auto;
+    cursor:move;touch-action:none;
+  }
+  .handle::after{content:attr(data-i);position:absolute;left:22px;top:-2px;font-size:10px;color:var(--accent)}
+  /* fingers need a bigger target than the dot: grow the hit area, not the dot */
+  .handle::before{content:"";position:absolute;inset:-13px;border-radius:50%}
+  @media (pointer:coarse){
+    .handle{width:26px;height:26px;margin:-13px 0 0 -13px}
+    .handle::before{inset:-16px}
+  }
+  .frame{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4;opacity:.9}
+  .rulerline{fill:none;stroke:#fff;stroke-width:2;stroke-dasharray:6 5}
+
+  /* ---------- panel ---------- */
+  #panel{
+    position:absolute;top:0;right:0;bottom:0;width:340px;background:var(--panel);
+    border-left:1px solid var(--line);display:flex;flex-direction:column;z-index:20;
+    transition:transform .18s ease;
+  }
+  #panel.closed{transform:translateX(340px)}
+  #panelToggle{
+    position:absolute;top:12px;right:352px;z-index:21;transition:right .18s ease;
+  }
+  #panel.closed ~ #panelToggle{right:12px}
+  .phead{padding:12px 14px;border-bottom:1px solid var(--line)}
+  .phead h1{margin:0;font-size:14px;letter-spacing:.2px}
+  .phead p{margin:3px 0 0;color:var(--dim);font-size:11.5px}
+  .pbody{flex:1;overflow-y:auto;overscroll-behavior:contain}
+  details{border-bottom:1px solid var(--line)}
+  summary{
+    padding:9px 14px;cursor:pointer;font-weight:600;font-size:12px;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--dim);list-style:none;display:flex;justify-content:space-between;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";color:var(--dim)}
+  details[open] summary::after{content:"–"}
+  details[open] summary{color:var(--ink)}
+  .sec{padding:2px 14px 14px}
+
+  button,select,input[type=text],input[type=search]{
+    font:inherit;color:var(--ink);background:#232733;border:1px solid var(--line);
+    border-radius:6px;padding:5px 9px;
+  }
+  button{cursor:pointer}
+  button:hover{border-color:#3d4557;background:#282d3b}
+  button.pri{background:var(--accent);color:#1a1206;border-color:var(--accent);font-weight:600}
+  button.pri:hover{filter:brightness(1.08)}
+  button.on{border-color:var(--accent);color:var(--accent)}
+  button.sm{padding:3px 7px;font-size:11.5px}
+  .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .row+.row{margin-top:7px}
+  label.opt{display:flex;gap:7px;align-items:center;padding:4px 0;cursor:pointer}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  input[type=search]{width:100%}
+  .hint{color:var(--dim);font-size:11.5px;margin:7px 0 0}
+  .hint b{color:var(--ink);font-weight:600}
+  ol.steps{margin:6px 0 0;padding-left:18px;color:var(--dim);font-size:11.5px}
+  ol.steps li{margin:4px 0}
+  ol.steps b{color:var(--ink)}
+
+  .item{
+    display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);
+    border-radius:6px;margin-top:6px;background:#1e222c;
+  }
+  .item .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item.act{border-color:var(--accent)}
+  .item .tag{font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:0 6px}
+  .item .tag.found{color:var(--ok);border-color:#2c5c43}
+  .drop{
+    border:1.5px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--dim);
+    font-size:11.5px;cursor:pointer;
+  }
+  .drop:hover,.drop.hot{border-color:var(--accent);color:var(--ink)}
+
+  /* ---------- hud ---------- */
+  #hud{position:absolute;left:12px;bottom:12px;z-index:15;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+  .chip{
+    background:rgba(20,23,30,.86);border:1px solid var(--line);border-radius:6px;padding:4px 8px;
+    font-size:11.5px;color:var(--dim);backdrop-filter:blur(4px)
+  }
+  .chip b{color:var(--ink);font-weight:600}
+  #scalebar{display:flex;align-items:center;gap:6px}
+  #scalebar .bar{height:7px;border:1px solid var(--ink);border-top:none}
+  #zoomctl{position:absolute;left:12px;top:12px;z-index:15;display:flex;flex-direction:column;gap:6px}
+  #zoomctl button{width:34px;height:34px;font-size:16px;padding:0;background:rgba(20,23,30,.86)}
+  #attrib{position:absolute;right:0;bottom:0;z-index:14;font-size:10px;color:var(--dim);
+    background:rgba(20,23,30,.8);padding:2px 6px;border-top-left-radius:5px;max-width:60vw;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #panel:not(.closed) ~ #attrib{right:340px}
+  #toast{
+    position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:40;
+    background:rgba(20,23,30,.94);border:1px solid var(--line);border-radius:7px;padding:7px 13px;
+    font-size:12px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:70vw;text-align:center
+  }
+  #toast.show{opacity:1}
+  #popup{
+    position:absolute;z-index:30;background:rgba(20,23,30,.96);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;font-size:12px;max-width:270px;transform:translate(-50%,-100%);
+    margin-top:-14px;display:none;box-shadow:0 8px 24px rgba(0,0,0,.5)
+  }
+  #popup h4{margin:0 0 5px;font-size:12.5px}
+  #popup table{border-collapse:collapse;width:100%}
+  #popup td{padding:1px 0;vertical-align:top;font-size:11px;color:var(--dim)}
+  #popup td.k{padding-right:8px;white-space:nowrap;color:#7f8899}
+  #popup .x{position:absolute;top:4px;right:7px;cursor:pointer;color:var(--dim)}
+
+  @media (max-width:760px){
+    #panel{width:100%;max-width:100%}
+    #panel.closed{transform:translateY(calc(100% - 42px))}
+    #panel{top:auto;height:62%}
+    #panelToggle{right:12px}
+    #panel:not(.closed) ~ #attrib{right:0}
+  }
+</style>
+</head>
+<body>
+
+<div id="map">
+  <div class="layer" id="tiles"></div>
+  <div class="layer" id="overlays"></div>
+  <svg class="layer" id="vector"></svg>
+  <div class="layer" id="markers"></div>
+  <div class="layer" id="handles"></div>
+</div>
+
+<div id="zoomctl">
+  <button id="zin" title="Zoom in">+</button>
+  <button id="zout" title="Zoom out">−</button>
+  <button id="locate" title="Show my position">◎</button>
+</div>
+
+<div id="hud">
+  <div class="chip" id="scalebar"><div class="bar" id="scaleBar"></div><span id="scaleTxt">—</span></div>
+  <div class="chip" id="coords">—</div>
+</div>
+
+<div id="popup"><span class="x" id="popupX">✕</span><div id="popupBody"></div></div>
+<div id="toast"></div>
+
+<aside id="panel">
+  <div class="phead">
+    <h1>Petrohrad — topo overlay</h1>
+    <p>Warp the drawn sector maps onto real satellite imagery.</p>
+  </div>
+  <div class="pbody">
+
+    <details open>
+      <summary>How to use</summary>
+      <div class="sec">
+        <ol class="steps">
+          <li>Pick <b>Satellite</b> below and zoom to the sector you care about.</li>
+          <li>Screenshot a drawn sector map (guidebook page, planetmountain, ČHS) and press <b>Ctrl/Cmd+V</b> here — or drag the image file onto the map.</li>
+          <li>Drag the <b>4 orange corners</b> onto features you can identify on both images: road bends, forest edges, field corners, the chateau, the pond.</li>
+          <li>Pull the <b>opacity</b> slider until you can see both. Now the drawn blobs sit on real terrain.</li>
+          <li>Drop <b>pins</b> on the boulders you want, then <b>Export GPX</b> and open it in Mapy.cz / Locus / OsmAnd on your phone.</li>
+        </ol>
+        <p class="hint">Everything is stored in your browser (localStorage). No server, no account — works offline once loaded, except map tiles.</p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Base map</summary>
+      <div class="sec" id="layerList"></div>
+      <div class="sec" style="padding-top:0">
+        <p class="hint">Satellite is what you want for georeferencing — forest clearings and boulder fields are visible. CyclOSM draws forest tracks best for the approach.</p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Topo overlays</summary>
+      <div class="sec">
+        <div class="drop" id="drop">
+          Drop an image here, click to pick a file,<br>or paste a screenshot with Ctrl/Cmd+V
+        </div>
+        <input type="file" id="file" accept="image/*" multiple hidden>
+        <div id="topoList"></div>
+        <div id="topoCtl" style="display:none">
+          <div class="row" style="margin-top:10px">
+            <span style="color:var(--dim);font-size:11.5px">Opacity</span>
+          </div>
+          <input type="range" id="opacity" min="0" max="100" value="65">
+          <div class="row">
+            <button class="sm" id="lockBtn">Lock corners</button>
+            <button class="sm" id="resetCorners">Reset shape</button>
+            <button class="sm" id="delTopo">Delete</button>
+          </div>
+          <p class="hint">Corner handles are hidden while locked, so you can pan without nudging the alignment.</p>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Real climbing data (OSM)</summary>
+      <div class="sec">
+        <div class="row">
+          <button class="pri" id="fetchOsm">Load rocks in view</button>
+          <button class="sm" id="clearOsm">Clear</button>
+        </div>
+        <label class="opt"><input type="checkbox" id="showOsm" checked> Show OSM features</label>
+        <label class="opt"><input type="checkbox" id="showOsmLbl" checked> Show names</label>
+        <p class="hint" id="osmStat">Queries the Overpass API for <b>sport=climbing</b>, <b>climbing=*</b> and rock/cliff features in the current view. Czech crags are decently mapped — this is the ground truth to align your topo against.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Sector index</summary>
+      <div class="sec">
+        <input type="search" id="sectorSearch" placeholder="Filter sectors…">
+        <div id="sectorList"></div>
+        <p class="hint">Names collected from the Petrohrad guidebook / planetmountain / ČHS listings. <b>No coordinates are baked in</b> — a sector turns green when a matching name is found in the OSM data you loaded; otherwise use <b>Place</b> and click the map once you have identified it under an overlay.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Pins &amp; export</summary>
+      <div class="sec">
+        <div class="row">
+          <button id="addPin">Add pin</button>
+          <button class="sm" id="ruler">Ruler</button>
+        </div>
+        <div id="pinList"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="pri" id="expGpx">Export GPX</button>
+          <button class="sm" id="expGeo">GeoJSON</button>
+        </div>
+        <label class="opt"><input type="checkbox" id="gpxOsm"> Include OSM features in export</label>
+        <div class="row" style="margin-top:10px">
+          <span style="color:var(--dim);font-size:11.5px">Open this view in</span>
+          <button class="sm" id="openMapy">Mapy.cz</button>
+          <button class="sm" id="openOsm">OSM</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="sm" id="saveProj">Save project</button>
+          <button class="sm" id="loadProj">Load project</button>
+          <button class="sm" id="wipe">Reset all</button>
+        </div>
+        <input type="file" id="projFile" accept=".json,application/json" hidden>
+        <p class="hint">The project file contains your overlays (images included), their alignment, and all pins — that is what you back up or share with the others.</p>
+      </div>
+    </details>
+
+  </div>
+</aside>
+<button id="panelToggle" class="sm">☰</button>
+<div id="attrib">—</div>
+
+<script>
+"use strict";
+/* =======================================================================
+   Petrohrad topo overlay — dependency-free slippy map.
+   Deliberately no CDN: the whole thing is one file that runs from disk.
+   ======================================================================= */
+
+const TILE = 256, MINZ = 3, MAXZ = 21;
+const STORE = "petrohrad-map-v1";
+
+/* Centre of the Petrohrad granite: the area centroid quoted by the Czech
+   listings (~470 m a.s.l.). Sector positions are NOT guessed anywhere. */
+const HOME = { lat: 50.1200, lng: 13.4490, zoom: 15 };
+
+const LAYERS = {
+  esri: { name:"Satellite (Esri)", url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          max:19, attr:"Imagery © Esri, Maxar, Earthstar Geographics" },
+  osm:  { name:"OpenStreetMap", url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+          max:19, attr:"© OpenStreetMap contributors" },
+  cyclosm:{ name:"CyclOSM (forest tracks)", url:"https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png",
+          sub:["a","b","c"], max:18, attr:"CyclOSM | © OpenStreetMap contributors" },
+  topo: { name:"OpenTopoMap (contours)", url:"https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+          sub:["a","b","c"], max:17, attr:"© OpenTopoMap (CC-BY-SA) | © OpenStreetMap contributors" },
+  cuzk: { name:"Orthophoto ČÚZK (CZ)", url:"https://ags.cuzk.cz/arcgis2/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}",
+          max:19, attr:"© ČÚZK", note:"national imagery — may be unavailable" },
+};
+
+const OVERPASS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
+
+/* Sector / rock names as they appear in the Petrohrad guidebook and the
+   online listings. Names only — see the note in the panel. */
+const SECTORS = [
+  { g:"Petrohrad — central", n:["Větrná hůrka","Pod hradem","Hřbitovní kameny","Malý Yosemite (Josemit)",
+      "Podzimní věž","Vyhlídková skála","Brána","Skalní město","Osamělé kameny","Skály u silnice",
+      "Potoční kameny","První skála","Kamenné srdce","Chrám","Vrchol kopce","Sputnik"] },
+  { g:"Surrounding areas", n:["Vlčí kopec","Kosobody","Bukov","Ležky","Žihle"] },
+];
+
+/* ---------------------------------------------------------------- state */
+let S = {
+  center: { lat: HOME.lat, lng: HOME.lng },
+  zoom: HOME.zoom,
+  layer: "esri",
+  pins: [],      // {id,name,lat,lng}
+  topos: [],     // {id,name,src,corners:[{lat,lng}x4],opacity,visible,locked}
+  sectors: {},   // name -> {lat,lng}
+};
+let osmFeats = [], activeTopo = null, mode = null, ruler = [], me = null, uid = 1;
+
+const $ = s => document.querySelector(s);
+const map = $("#map"), elTiles = $("#tiles"), elOv = $("#overlays"),
+      elVec = $("#vector"), elMk = $("#markers"), elH = $("#handles");
+let VW = 0, VH = 0;
+
+/* ------------------------------------------------------------ projection */
+function project(lat, lng, z) {
+  const s = TILE * Math.pow(2, z);
+  const la = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const sy = Math.sin(la * Math.PI / 180);
+  return { x: (lng + 180) / 360 * s,
+           y: (0.5 - Math.log((1 + sy) / (1 - sy)) / (4 * Math.PI)) * s };
+}
+function unproject(x, y, z) {
+  const s = TILE * Math.pow(2, z);
+  const n = Math.PI - 2 * Math.PI * y / s;
+  return { lat: 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))),
+           lng: x / s * 360 - 180 };
+}
+function toScreen(lat, lng) {
+  const p = project(lat, lng, S.zoom), c = project(S.center.lat, S.center.lng, S.zoom);
+  return { x: p.x - c.x + VW / 2, y: p.y - c.y + VH / 2 };
+}
+function toLatLng(x, y) {
+  const c = project(S.center.lat, S.center.lng, S.zoom);
+  return unproject(c.x + x - VW / 2, c.y + y - VH / 2, S.zoom);
+}
+function dist(a, b) { // metres, haversine
+  const R = 6371000, r = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+  const h = Math.sin(dLat / 2) ** 2 +
+            Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------------------------------------------------------- persistence */
+function save() {
+  try { localStorage.setItem(STORE, JSON.stringify(S)); }
+  catch (e) { toast("Could not save — storage full (big overlay images?)"); }
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    S = Object.assign(S, o);
+    S.pins = S.pins || []; S.topos = S.topos || []; S.sectors = S.sectors || {};
+    for (const t of S.topos) uid = Math.max(uid, (+String(t.id).replace(/\D/g, "") || 0) + 1);
+  } catch (e) { /* corrupt state must never brick the map */ }
+}
+
+/* ---------------------------------------------------------------- tiles */
+const tileCache = new Map();
+const badLayer = {};
+function renderTiles() {
+  const L = LAYERS[S.layer];
+  const tz = clamp(Math.round(S.zoom), MINZ, Math.min(MAXZ, L.max));
+  const scale = Math.pow(2, S.zoom - tz);
+  const size = TILE * scale;
+  const c = project(S.center.lat, S.center.lng, tz);
+  const ox = c.x * scale - VW / 2, oy = c.y * scale - VH / 2;
+  const n = Math.pow(2, tz);
+  const x0 = Math.floor(ox / size), x1 = Math.floor((ox + VW) / size);
+  const y0 = Math.floor(oy / size), y1 = Math.floor((oy + VH) / size);
+  const want = new Set();
+
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= n) continue;
+      const wx = ((x % n) + n) % n;
+      const key = `${S.layer}/${tz}/${wx}/${y}`;
+      want.add(key);
+      let img = tileCache.get(key);
+      if (!img) {
+        img = new Image();
+        img.alt = ""; img.decoding = "async"; img.loading = "eager";
+        img.style.opacity = "0";
+        img.onload = () => { img.style.transition = "opacity .18s"; img.style.opacity = "1"; };
+        img.onerror = () => {
+          img.style.display = "none";
+          if (!badLayer[S.layer]) { badLayer[S.layer] = true; drawLists(); }
+        };
+        let u = L.url.replace("{z}", tz).replace("{x}", wx).replace("{y}", y);
+        if (L.sub) u = u.replace("{s}", L.sub[(wx + y) % L.sub.length]);
+        img.src = u;
+        tileCache.set(key, img);
+        elTiles.appendChild(img);
+      }
+      img.style.left = (x * size - ox) + "px";
+      img.style.top  = (y * size - oy) + "px";
+      img.style.width = img.style.height = Math.ceil(size + 1) + "px";
+    }
+  }
+  for (const [key, img] of tileCache) {
+    if (!want.has(key)) { img.remove(); tileCache.delete(key); }
+  }
+  $("#attrib").textContent = L.attr;
+}
+
+/* ------------------------------------------------- homography for topos */
+function solveH(src, dst) {
+  // 8x8 solve for the projective transform src -> dst
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = src[i], u = dst[i].x, v = dst[i].y;
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const N = 8;
+  for (let i = 0; i < N; i++) A[i].push(b[i]);
+  for (let col = 0; col < N; col++) {
+    let piv = col;
+    for (let r = col + 1; r < N; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    if (Math.abs(A[piv][col]) < 1e-12) return null;
+    [A[col], A[piv]] = [A[piv], A[col]];
+    const d = A[col][col];
+    for (let k = col; k <= N; k++) A[col][k] /= d;
+    for (let r = 0; r < N; r++) {
+      if (r === col) continue;
+      const f = A[r][col];
+      if (!f) continue;
+      for (let k = col; k <= N; k++) A[r][k] -= f * A[col][k];
+    }
+  }
+  return A.map(r => r[N]);
+}
+function matrix3d(h) {
+  return `matrix3d(${h[0]},${h[3]},0,${h[6]},${h[1]},${h[4]},0,${h[7]},0,0,1,0,${h[2]},${h[5]},0,1)`;
+}
+
+const topoImgs = new Map();
+function renderTopos() {
+  const seen = new Set();
+  for (const t of S.topos) {
+    seen.add(t.id);
+    let img = topoImgs.get(t.id);
+    if (!img) {
+      img = new Image();
+      img.onload = () => renderTopos();
+      img.onerror = () => toast("Overlay image could not be loaded");
+      img.src = t.src;
+      topoImgs.set(t.id, img);
+      elOv.appendChild(img);
+    }
+    if (!img.naturalWidth) continue;
+    const w = img.naturalWidth, hh = img.naturalHeight;
+    img.style.width = w + "px"; img.style.height = hh + "px";
+    img.style.opacity = t.visible === false ? 0 : (t.opacity ?? 65) / 100;
+    img.style.display = t.visible === false ? "none" : "";
+    const dst = t.corners.map(c => toScreen(c.lat, c.lng));
+    const H = solveH([{x:0,y:0},{x:w,y:0},{x:w,y:hh},{x:0,y:hh}], dst);
+    img.style.transform = H ? matrix3d(H) : "";
+    img.style.visibility = H ? "visible" : "hidden";
+  }
+  for (const [id, img] of topoImgs) {
+    if (!seen.has(id)) { img.remove(); topoImgs.delete(id); }
+  }
+}
+function renderHandles() {
+  elH.innerHTML = "";
+  const t = S.topos.find(t => t.id === activeTopo);
+  if (!t || t.locked || t.visible === false) return;
+  t.corners.forEach((c, i) => {
+    const p = toScreen(c.lat, c.lng);
+    const d = document.createElement("div");
+    d.className = "handle";
+    d.dataset.i = i + 1;
+    d.style.left = p.x + "px"; d.style.top = p.y + "px";
+    d.addEventListener("pointerdown", ev => {
+      ev.stopPropagation(); ev.preventDefault();
+      // capture is an optimisation; if it throws (some mobile WebViews) the
+      // drag must still work, so never let it abort the listener setup
+      try { d.setPointerCapture(ev.pointerId); } catch (_) {}
+      const move = e => {
+        const r = map.getBoundingClientRect();
+        t.corners[i] = toLatLng(e.clientX - r.left, e.clientY - r.top);
+        renderTopos(); renderHandles(); renderVector();
+      };
+      const up = () => {
+        d.removeEventListener("pointermove", move);
+        d.removeEventListener("pointerup", up);
+        save();
+      };
+      d.addEventListener("pointermove", move);
+      d.addEventListener("pointerup", up);
+    });
+    elH.appendChild(d);
+  });
+}
+
+/* --------------------------------------------------------- vector layer */
+function renderVector() {
+  let s = "";
+  const t = S.topos.find(t => t.id === activeTopo);
+  if (t && !t.locked && t.visible !== false) {
+    const p = t.corners.map(c => toScreen(c.lat, c.lng));
+    s += `<polygon class="frame" points="${p.map(q => `${q.x},${q.y}`).join(" ")}"/>`;
+  }
+  if (ruler.length === 2) {
+    const a = toScreen(ruler[0].lat, ruler[0].lng), b = toScreen(ruler[1].lat, ruler[1].lng);
+    s += `<line class="rulerline" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>`;
+  }
+  elVec.innerHTML = s;
+}
+
+/* -------------------------------------------------------------- markers */
+function renderMarkers() {
+  elMk.innerHTML = "";
+  const showLbl = $("#showOsmLbl").checked;
+  if ($("#showOsm").checked) {
+    for (const f of osmFeats) addMarker(f.lat, f.lng, f.name, "osm", () => popupOsm(f));
+    if (!showLbl) elMk.querySelectorAll(".osm .lbl").forEach(e => e.remove());
+  }
+  for (const [name, c] of Object.entries(S.sectors)) addMarker(c.lat, c.lng, name, "sector");
+  for (const p of S.pins) addMarker(p.lat, p.lng, p.name, "pin", () => popupPin(p));
+  for (const r of ruler) addMarker(r.lat, r.lng, "", "pin");
+  if (me) addMarker(me.lat, me.lng, "you", "me");
+}
+function addMarker(lat, lng, label, cls, onclick) {
+  const p = toScreen(lat, lng);
+  if (p.x < -250 || p.y < -250 || p.x > VW + 250 || p.y > VH + 250) return;
+  const d = document.createElement("div");
+  d.className = "mk " + cls;
+  d.style.left = p.x + "px"; d.style.top = p.y + "px";
+  d.innerHTML = `<div class="dot"></div>` + (label ? `<div class="lbl"></div>` : "");
+  if (label) d.querySelector(".lbl").textContent = label;
+  if (onclick) d.addEventListener("click", e => { e.stopPropagation(); onclick(); });
+  elMk.appendChild(d);
+}
+
+/* ---------------------------------------------------------------- popup */
+function showPopup(lat, lng, html) {
+  const p = toScreen(lat, lng), el = $("#popup");
+  el.style.left = p.x + "px"; el.style.top = p.y + "px";
+  $("#popupBody").innerHTML = html;
+  el.style.display = "block";
+}
+function hidePopup() { $("#popup").style.display = "none"; }
+function popupOsm(f) {
+  const skip = new Set(["name"]);
+  const rows = Object.entries(f.tags).filter(([k]) => !skip.has(k)).slice(0, 14)
+    .map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("");
+  showPopup(f.lat, f.lng,
+    `<h4>${esc(f.name || "(unnamed rock)")}</h4><table>${rows}</table>
+     <div style="margin-top:7px"><button class="sm" onclick="pinHere(${f.lat},${f.lng},'${esc(f.name || "rock").replace(/'/g, "\\'")}')">Pin this</button>
+     <button class="sm" onclick="copyCoord(${f.lat},${f.lng})">Copy coords</button></div>`);
+}
+function popupPin(p) {
+  showPopup(p.lat, p.lng,
+    `<h4>${esc(p.name)}</h4>
+     <table><tr><td class="k">lat</td><td>${p.lat.toFixed(6)}</td></tr>
+     <tr><td class="k">lon</td><td>${p.lng.toFixed(6)}</td></tr></table>
+     <div style="margin-top:7px"><button class="sm" onclick="renamePin('${p.id}')">Rename</button>
+     <button class="sm" onclick="copyCoord(${p.lat},${p.lng})">Copy</button>
+     <button class="sm" onclick="delPin('${p.id}')">Delete</button></div>`);
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+window.pinHere = (lat, lng, name) => { S.pins.push({ id:"p" + uid++, name, lat, lng }); save(); hidePopup(); draw(); };
+window.copyCoord = (lat, lng) => {
+  const s = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+  navigator.clipboard?.writeText(s).then(() => toast("Copied " + s), () => toast(s));
+};
+window.renamePin = id => {
+  const p = S.pins.find(p => p.id === id); if (!p) return;
+  const n = prompt("Pin name", p.name); if (n === null) return;
+  p.name = n || p.name; save(); hidePopup(); draw();
+};
+window.delPin = id => { S.pins = S.pins.filter(p => p.id !== id); save(); hidePopup(); draw(); };
+
+/* ----------------------------------------------------------------- draw */
+function draw() {
+  VW = map.clientWidth; VH = map.clientHeight;
+  renderTiles(); renderTopos(); renderVector(); renderMarkers(); renderHandles();
+  drawScale(); drawLists();
+  $("#coords").innerHTML = `<b>${S.center.lat.toFixed(5)}, ${S.center.lng.toFixed(5)}</b> · z${S.zoom.toFixed(1)}`;
+}
+function drawScale() {
+  const mpp = 156543.03392 * Math.cos(S.center.lat * Math.PI / 180) / Math.pow(2, S.zoom);
+  let m = mpp * 90, p = Math.pow(10, Math.floor(Math.log10(m)));
+  const r = m / p; m = (r >= 5 ? 5 : r >= 2 ? 2 : 1) * p;
+  $("#scaleBar").style.width = (m / mpp) + "px";
+  $("#scaleTxt").textContent = m >= 1000 ? (m / 1000) + " km" : m + " m";
+}
+
+/* --------------------------------------------------------- interactions */
+let drag = null, pinch = null;
+map.addEventListener("pointerdown", e => {
+  if (e.target.closest("#popup")) return;
+  try { map.setPointerCapture(e.pointerId); } catch (_) {}
+  drag = { x: e.clientX, y: e.clientY, moved: 0, id: e.pointerId };
+  map.classList.add("dragging");
+});
+map.addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  drag.x = e.clientX; drag.y = e.clientY;
+  const c = project(S.center.lat, S.center.lng, S.zoom);
+  S.center = unproject(c.x - dx, c.y - dy, S.zoom);
+  draw();
+});
+map.addEventListener("pointerup", e => {
+  const moved = drag ? drag.moved : 99;
+  drag = null; map.classList.remove("dragging");
+  if (moved < 5) onClick(e);
+  else save();
+});
+map.addEventListener("pointercancel", () => { drag = null; map.classList.remove("dragging"); });
+
+function onClick(e) {
+  const r = map.getBoundingClientRect();
+  const ll = toLatLng(e.clientX - r.left, e.clientY - r.top);
+  if (mode === "pin") {
+    const n = prompt("Pin name", "boulder " + (S.pins.length + 1));
+    if (n !== null) { S.pins.push({ id:"p" + uid++, name: n || "pin", lat: ll.lat, lng: ll.lng }); save(); }
+    setMode(null); draw(); return;
+  }
+  if (mode && mode.startsWith("place:")) {
+    S.sectors[mode.slice(6)] = { lat: ll.lat, lng: ll.lng };
+    save(); setMode(null); draw(); return;
+  }
+  if (mode === "ruler") {
+    ruler.push(ll);
+    if (ruler.length > 2) ruler = [ll];
+    if (ruler.length === 2) {
+      const d = dist(ruler[0], ruler[1]);
+      toast(`${d < 1000 ? d.toFixed(0) + " m" : (d / 1000).toFixed(2) + " km"} straight line · ~${Math.max(1, Math.round(d / 65))} min walk`);
+    }
+    draw(); return;
+  }
+  if (!e.target.closest(".mk")) hidePopup();
+}
+
+map.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = map.getBoundingClientRect();
+  zoomAround(e.clientX - r.left, e.clientY - r.top, -Math.sign(e.deltaY) * 0.5);
+}, { passive: false });
+
+function zoomAround(px, py, dz) {
+  const before = toLatLng(px, py);
+  S.zoom = clamp(S.zoom + dz, MINZ, MAXZ);
+  const after = toLatLng(px, py);
+  const c = project(S.center.lat, S.center.lng, S.zoom);
+  const bp = project(before.lat, before.lng, S.zoom), ap = project(after.lat, after.lng, S.zoom);
+  S.center = unproject(c.x + bp.x - ap.x, c.y + bp.y - ap.y, S.zoom);
+  draw(); save();
+}
+
+/* touch pinch */
+const pts = new Map();
+map.addEventListener("pointerdown", e => pts.set(e.pointerId, e));
+map.addEventListener("pointermove", e => {
+  if (!pts.has(e.pointerId)) return;
+  pts.set(e.pointerId, e);
+  if (pts.size === 2) {
+    drag = null;
+    const [a, b] = [...pts.values()];
+    const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const r = map.getBoundingClientRect();
+    const cx = (a.clientX + b.clientX) / 2 - r.left, cy = (a.clientY + b.clientY) / 2 - r.top;
+    if (pinch) zoomAround(cx, cy, Math.log2(d / pinch));
+    pinch = d;
+  }
+});
+["pointerup","pointercancel"].forEach(t => map.addEventListener(t, e => {
+  pts.delete(e.pointerId);
+  if (pts.size < 2) pinch = null;
+}));
+
+$("#zin").onclick = () => zoomAround(VW / 2, VH / 2, 1);
+$("#zout").onclick = () => zoomAround(VW / 2, VH / 2, -1);
+$("#locate").onclick = () => {
+  if (!navigator.geolocation) return toast("Geolocation not available");
+  toast("Locating…");
+  navigator.geolocation.watchPosition(
+    p => { me = { lat: p.coords.latitude, lng: p.coords.longitude };
+           S.center = { ...me }; S.zoom = Math.max(S.zoom, 16); draw(); },
+    () => toast("Could not get your position"),
+    { enableHighAccuracy: true, timeout: 10000 });
+};
+$("#popupX").onclick = hidePopup;
+
+function setMode(m) {
+  mode = m;
+  map.classList.toggle("placing", !!m);
+  $("#addPin").classList.toggle("on", m === "pin");
+  $("#ruler").classList.toggle("on", m === "ruler");
+  if (m === "ruler") ruler = [];
+}
+
+/* ------------------------------------------------------- topo overlays */
+function addTopo(src, name) {
+  const img = new Image();
+  img.onload = () => {
+    // drop it centred on the view, covering ~60% of the shorter side
+    const ar = img.naturalWidth / img.naturalHeight;
+    let w = VW * 0.6, h = w / ar;
+    if (h > VH * 0.75) { h = VH * 0.75; w = h * ar; }
+    const cx = VW / 2, cy = VH / 2;
+    const corners = [[-1,-1],[1,-1],[1,1],[-1,1]]
+      .map(([sx, sy]) => toLatLng(cx + sx * w / 2, cy + sy * h / 2));
+    const t = { id: "t" + uid++, name: name || "topo " + (S.topos.length + 1),
+                src, corners, opacity: 65, visible: true, locked: false };
+    S.topos.push(t);
+    activeTopo = t.id;
+    save(); draw();
+    toast("Drag the 4 orange corners onto matching features");
+  };
+  img.onerror = () => toast("That image could not be read");
+  img.src = src;
+}
+function fileToTopo(f) {
+  if (!f || !f.type.startsWith("image/")) return;
+  const fr = new FileReader();
+  fr.onload = () => addTopo(fr.result, f.name.replace(/\.[^.]+$/, ""));
+  fr.readAsDataURL(f);
+}
+$("#drop").onclick = () => $("#file").click();
+$("#file").onchange = e => { [...e.target.files].forEach(fileToTopo); e.target.value = ""; };
+["dragenter","dragover"].forEach(t => document.addEventListener(t, e => {
+  e.preventDefault(); $("#drop").classList.add("hot");
+}));
+["dragleave","drop"].forEach(t => document.addEventListener(t, e => {
+  e.preventDefault(); $("#drop").classList.remove("hot");
+}));
+document.addEventListener("drop", e => {
+  const dt = e.dataTransfer; if (!dt) return;
+  [...dt.files].forEach(fileToTopo);
+  const url = dt.getData("text/uri-list") || dt.getData("text/plain");
+  if (!dt.files.length && url && /^https?:/.test(url)) addTopo(url, "topo");
+});
+document.addEventListener("paste", e => {
+  if (!e.clipboardData) return;
+  for (const it of e.clipboardData.items) {
+    if (it.type.startsWith("image/")) { fileToTopo(it.getAsFile()); e.preventDefault(); return; }
+  }
+  const txt = e.clipboardData.getData("text");
+  if (txt && /^https?:.*\.(png|jpe?g|webp|gif)/i.test(txt.trim())) addTopo(txt.trim(), "topo");
+});
+
+$("#opacity").oninput = e => {
+  const t = S.topos.find(t => t.id === activeTopo); if (!t) return;
+  t.opacity = +e.target.value; renderTopos();
+};
+$("#opacity").onchange = save;
+$("#lockBtn").onclick = () => {
+  const t = S.topos.find(t => t.id === activeTopo); if (!t) return;
+  t.locked = !t.locked; save(); draw();
+};
+$("#resetCorners").onclick = () => {
+  const t = S.topos.find(t => t.id === activeTopo); if (!t) return;
+  const img = topoImgs.get(t.id); if (!img || !img.naturalWidth) return;
+  const ar = img.naturalWidth / img.naturalHeight;
+  let w = VW * 0.6, h = w / ar;
+  if (h > VH * 0.75) { h = VH * 0.75; w = h * ar; }
+  t.corners = [[-1,-1],[1,-1],[1,1],[-1,1]]
+    .map(([sx, sy]) => toLatLng(VW / 2 + sx * w / 2, VH / 2 + sy * h / 2));
+  save(); draw();
+};
+$("#delTopo").onclick = () => {
+  const t = S.topos.find(t => t.id === activeTopo); if (!t) return;
+  if (!confirm(`Delete overlay “${t.name}”?`)) return;
+  S.topos = S.topos.filter(x => x.id !== t.id);
+  activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
+  save(); draw();
+};
+
+/* ------------------------------------------------------------- overpass */
+async function fetchOsm() {
+  const nw = toLatLng(0, 0), se = toLatLng(VW, VH);
+  const bbox = `${se.lat.toFixed(5)},${nw.lng.toFixed(5)},${nw.lat.toFixed(5)},${se.lng.toFixed(5)}`;
+  const q = `[out:json][timeout:45];
+(
+  nwr["sport"="climbing"](${bbox});
+  nwr["climbing"](${bbox});
+  nwr["natural"~"^(cliff|rock|stone|bare_rock)$"](${bbox});
+);
+out center tags;`;
+  const stat = $("#osmStat");
+  stat.textContent = "Querying Overpass…";
+  $("#fetchOsm").disabled = true;
+  for (const ep of OVERPASS) {
+    try {
+      const r = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(q),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      osmFeats = (j.elements || []).map(el => {
+        const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon;
+        if (lat == null) return null;
+        const t = el.tags || {};
+        return { id: el.type + el.id, lat, lng, tags: t, name: t.name || t["climbing:name"] || "" };
+      }).filter(Boolean);
+      stat.innerHTML = `<b>${osmFeats.length}</b> features loaded from OSM (${osmFeats.filter(f => f.name).length} named).`;
+      matchSectors();
+      $("#fetchOsm").disabled = false;
+      draw();
+      return;
+    } catch (err) { stat.textContent = "Endpoint failed, trying another…"; }
+  }
+  stat.innerHTML = "All Overpass endpoints failed — check your connection and retry.";
+  $("#fetchOsm").disabled = false;
+}
+const norm = s => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+function matchSectors() {
+  let hit = 0;
+  for (const grp of SECTORS) for (const name of grp.n) {
+    if (S.sectors[name]) continue;
+    const key = norm(name.replace(/\(.*\)/, ""));
+    const f = osmFeats.find(f => f.name && (norm(f.name) === key ||
+              norm(f.name).includes(key) || key.includes(norm(f.name))));
+    if (f) { S.sectors[name] = { lat: f.lat, lng: f.lng }; hit++; }
+  }
+  if (hit) { save(); toast(`Matched ${hit} guidebook sector name(s) to OSM features`); }
+}
+$("#fetchOsm").onclick = fetchOsm;
+$("#clearOsm").onclick = () => { osmFeats = []; $("#osmStat").textContent = "Cleared."; draw(); };
+$("#showOsm").onchange = $("#showOsmLbl").onchange = draw;
+
+/* ---------------------------------------------------------------- lists */
+function drawLists() {
+  // base layers
+  const ll = $("#layerList");
+  if (ll.dataset.done !== "1") {
+    ll.innerHTML = Object.entries(LAYERS).map(([k, v]) =>
+      `<label class="opt"><input type="radio" name="bl" value="${k}"${k === S.layer ? " checked" : ""}>
+       <span>${esc(v.name)}</span>${v.note ? `<span class="tag">${esc(v.note)}</span>` : ""}</label>`).join("");
+    ll.querySelectorAll("input").forEach(i => i.onchange = () => {
+      S.layer = i.value; for (const [, img] of tileCache) img.remove();
+      tileCache.clear(); save(); draw();
+    });
+    ll.dataset.done = "1";
+  }
+  ll.querySelectorAll("label").forEach(l => {
+    const k = l.querySelector("input").value;
+    let t = l.querySelector(".tag.bad");
+    if (badLayer[k] && !t) {
+      t = document.createElement("span"); t.className = "tag bad";
+      t.style.color = "var(--bad)"; t.textContent = "not loading";
+      l.appendChild(t);
+    }
+  });
+
+  // topos
+  const tl = $("#topoList");
+  tl.innerHTML = S.topos.map(t => `
+    <div class="item${t.id === activeTopo ? " act" : ""}" data-id="${t.id}">
+      <input type="checkbox" ${t.visible === false ? "" : "checked"} data-vis="${t.id}">
+      <span class="nm">${esc(t.name)}</span>
+      ${t.locked ? '<span class="tag">locked</span>' : ""}
+    </div>`).join("") || `<p class="hint">No overlays yet.</p>`;
+  tl.querySelectorAll(".item").forEach(el => el.onclick = e => {
+    if (e.target.dataset.vis) return;
+    activeTopo = el.dataset.id; draw();
+  });
+  tl.querySelectorAll("[data-vis]").forEach(cb => cb.onchange = () => {
+    const t = S.topos.find(t => t.id === cb.dataset.vis);
+    t.visible = cb.checked; save(); draw();
+  });
+  const act = S.topos.find(t => t.id === activeTopo);
+  $("#topoCtl").style.display = act ? "" : "none";
+  if (act) {
+    $("#opacity").value = act.opacity ?? 65;
+    $("#lockBtn").textContent = act.locked ? "Unlock corners" : "Lock corners";
+    $("#lockBtn").classList.toggle("on", !!act.locked);
+  }
+
+  // sectors
+  const q = norm($("#sectorSearch").value || "");
+  $("#sectorList").innerHTML = SECTORS.map(g => {
+    const rows = g.n.filter(n => !q || norm(n).includes(q)).map(n => {
+      const c = S.sectors[n];
+      return `<div class="item">
+        <span class="nm">${esc(n)}</span>
+        ${c ? '<span class="tag found">located</span>' : ""}
+        <button class="sm" data-go="${esc(n)}">${c ? "Go" : "Place"}</button>
+        ${c ? `<button class="sm" data-clr="${esc(n)}">✕</button>` : ""}
+      </div>`;
+    }).join("");
+    return rows ? `<p class="hint" style="margin-top:10px"><b>${esc(g.g)}</b></p>${rows}` : "";
+  }).join("");
+  $("#sectorList").querySelectorAll("[data-go]").forEach(b => b.onclick = () => {
+    const n = b.dataset.go, c = S.sectors[n];
+    if (c) { S.center = { lat: c.lat, lng: c.lng }; S.zoom = Math.max(S.zoom, 17); save(); draw(); }
+    else { setMode("place:" + n); toast(`Click the map to place “${n}”`); }
+  });
+  $("#sectorList").querySelectorAll("[data-clr]").forEach(b => b.onclick = () => {
+    delete S.sectors[b.dataset.clr]; save(); draw();
+  });
+
+  // pins
+  $("#pinList").innerHTML = S.pins.map(p => `
+    <div class="item">
+      <span class="nm">${esc(p.name)}</span>
+      <button class="sm" data-goto="${p.id}">Go</button>
+      <button class="sm" data-del="${p.id}">✕</button>
+    </div>`).join("") || `<p class="hint">No pins yet.</p>`;
+  $("#pinList").querySelectorAll("[data-goto]").forEach(b => b.onclick = () => {
+    const p = S.pins.find(p => p.id === b.dataset.goto);
+    S.center = { lat: p.lat, lng: p.lng }; S.zoom = Math.max(S.zoom, 18); save(); draw();
+  });
+  $("#pinList").querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
+    S.pins = S.pins.filter(p => p.id !== b.dataset.del); save(); draw();
+  });
+}
+$("#sectorSearch").oninput = drawLists;
+$("#addPin").onclick = () => { setMode(mode === "pin" ? null : "pin"); toast("Click the map to drop a pin"); };
+$("#ruler").onclick = () => { setMode(mode === "ruler" ? null : "ruler"); if (mode) toast("Click two points"); draw(); };
+
+/* --------------------------------------------------------------- export */
+function download(name, text, mime) {
+  const b = new Blob([text], { type: mime });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b); a.download = name;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function waypoints() {
+  const w = S.pins.map(p => ({ lat: p.lat, lng: p.lng, name: p.name, desc: "pin" }));
+  for (const [n, c] of Object.entries(S.sectors)) w.push({ lat: c.lat, lng: c.lng, name: n, desc: "sector" });
+  if ($("#gpxOsm").checked)
+    for (const f of osmFeats) w.push({ lat: f.lat, lng: f.lng, name: f.name || "rock",
+      desc: Object.entries(f.tags).map(([k, v]) => k + "=" + v).join("; ") });
+  return w;
+}
+$("#expGpx").onclick = () => {
+  const w = waypoints();
+  if (!w.length) return toast("Nothing to export yet");
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="petrohrad-topo-overlay" xmlns="http://www.topografix.com/GPX/1/1">
+${w.map(p => `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}">
+    <name>${esc(p.name)}</name>
+    <desc>${esc(p.desc)}</desc>
+  </wpt>`).join("\n")}
+</gpx>`;
+  download("petrohrad.gpx", gpx, "application/gpx+xml");
+  toast(`Exported ${w.length} waypoints — import into Mapy.cz, Locus or OsmAnd`);
+};
+$("#expGeo").onclick = () => {
+  const w = waypoints();
+  if (!w.length) return toast("Nothing to export yet");
+  download("petrohrad.geojson", JSON.stringify({
+    type: "FeatureCollection",
+    features: w.map(p => ({ type: "Feature", properties: { name: p.name, desc: p.desc },
+      geometry: { type: "Point", coordinates: [+p.lng.toFixed(6), +p.lat.toFixed(6)] } }))
+  }, null, 1), "application/geo+json");
+};
+$("#openMapy").onclick = () => window.open(
+  `https://mapy.cz/turisticka?x=${S.center.lng.toFixed(5)}&y=${S.center.lat.toFixed(5)}&z=${Math.round(S.zoom)}`, "_blank");
+$("#openOsm").onclick = () => window.open(
+  `https://www.openstreetmap.org/#map=${Math.round(S.zoom)}/${S.center.lat.toFixed(5)}/${S.center.lng.toFixed(5)}`, "_blank");
+$("#saveProj").onclick = () => download("petrohrad-project.json", JSON.stringify(S), "application/json");
+$("#loadProj").onclick = () => $("#projFile").click();
+$("#projFile").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => {
+    try {
+      const o = JSON.parse(fr.result);
+      S = Object.assign(S, o);
+      for (const [, img] of topoImgs) img.remove();
+      topoImgs.clear();
+      activeTopo = S.topos[0]?.id || null;
+      save(); draw(); toast("Project loaded");
+    } catch (err) { toast("That file is not a valid project"); }
+  };
+  fr.readAsText(f);
+  e.target.value = "";
+};
+$("#wipe").onclick = () => {
+  if (!confirm("Delete all overlays, pins and sector positions?")) return;
+  localStorage.removeItem(STORE);
+  S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
+        pins: [], topos: [], sectors: {} };
+  for (const [, img] of topoImgs) img.remove();
+  topoImgs.clear(); activeTopo = null; osmFeats = []; draw();
+};
+
+/* ----------------------------------------------------------------- misc */
+let toastT;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg; el.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("show"), 3200);
+}
+$("#panelToggle").onclick = () => { $("#panel").classList.toggle("closed"); setTimeout(draw, 200); };
+addEventListener("resize", draw);
+addEventListener("keydown", e => {
+  if (e.key === "Escape") { setMode(null); hidePopup(); draw(); }
+});
+
+load();
+if (!S.topos.length && !S.pins.length) { S.center = { lat: HOME.lat, lng: HOME.lng }; S.zoom = HOME.zoom; }
+activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
+draw();
+</script>
+</body>
+</html>
