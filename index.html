@@ -48,6 +48,12 @@
     cursor:move;touch-action:none;
   }
   .handle::after{content:attr(data-i);position:absolute;left:22px;top:-2px;font-size:10px;color:var(--accent)}
+  /* fingers need a bigger target than the dot: grow the hit area, not the dot */
+  .handle::before{content:"";position:absolute;inset:-13px;border-radius:50%}
+  @media (pointer:coarse){
+    .handle{width:26px;height:26px;margin:-13px 0 0 -13px}
+    .handle::before{inset:-16px}
+  }
   .frame{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 4;opacity:.9}
   .rulerline{fill:none;stroke:#fff;stroke-width:2;stroke-dasharray:6 5}
 
@@ -508,7 +514,9 @@ function renderHandles() {
     d.style.left = p.x + "px"; d.style.top = p.y + "px";
     d.addEventListener("pointerdown", ev => {
       ev.stopPropagation(); ev.preventDefault();
-      d.setPointerCapture(ev.pointerId);
+      // capture is an optimisation; if it throws (some mobile WebViews) the
+      // drag must still work, so never let it abort the listener setup
+      try { d.setPointerCapture(ev.pointerId); } catch (_) {}
       const move = e => {
         const r = map.getBoundingClientRect();
         t.corners[i] = toLatLng(e.clientX - r.left, e.clientY - r.top);
@@ -624,7 +632,7 @@ function drawScale() {
 let drag = null, pinch = null;
 map.addEventListener("pointerdown", e => {
   if (e.target.closest("#popup")) return;
-  map.setPointerCapture(e.pointerId);
+  try { map.setPointerCapture(e.pointerId); } catch (_) {}
   drag = { x: e.clientX, y: e.clientY, moved: 0, id: e.pointerId };
   map.classList.add("dragging");
 });
