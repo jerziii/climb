@@ -1,0 +1,17 @@
+{
+  "sectors": {
+    "Větrná hůrka": { "lat": 50.125072, "lng": 13.451027 },
+    "Pod hradem": { "lat": 50.120045, "lng": 13.437817 },
+    "Hřbitovní kameny": { "lat": 50.122292, "lng": 13.441323 },
+    "Malý Yosemite (Josemit)": { "lat": 50.1185321, "lng": 13.4493623 },
+    "Skalní město": { "lat": 50.118599, "lng": 13.438909 },
+    "Potoční kameny": { "lat": 50.1188844, "lng": 13.43864345 },
+    "Podzimní věž": { "lat": 50.1172831, "lng": 13.4499264 },
+    "Vyhlídková skála": { "lat": 50.12075, "lng": 13.4515358 },
+    "Brána": { "lat": 50.1218644, "lng": 13.4560633 },
+    "Kamenné srdce": { "lat": 50.12205, "lng": 13.440967 },
+    "Vlčí kopec": { "lat": 50.1311914, "lng": 13.4854175 },
+    "Kosobody": { "lat": 50.1090267, "lng": 13.5124325 },
+    "Bukov": { "lat": 50.1443394, "lng": 13.5126256 }
+  }
+}
