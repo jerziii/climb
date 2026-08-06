@@ -1,3 +1,21 @@
+## 2026-08-06 — cesty zabudované do appky
+
+- **Co:** Data z `research/petrohrad-routes.md` přeparsována (Python skript,
+  ověřeno počty proti známým součtům) a zabudována přímo do `index.html`
+  jako `const ROUTES` — stejný vzor jako existující `SECTORS`, takže appka
+  jde dál otevřít přímo ze souboru bez serveru. V panelu Sector index má
+  teď každý lokalizovaný sektor tlačítko "Routes (N)", které rozbalí
+  scrollovatelný seznam skal a jejich cest/gradů. Skutečný rozsah dat byl
+  mnohem větší, než původní odhad — 285 skal, 2780 cest v 16 sektorech
+  (Vyhlídková skála a Brána jsou samy o sobě 62+64 skal). Soubor narostl
+  z ~46 KB na ~134 KB.
+- **Stav:** Ověřeno v prohlížeči — funguje i na největším sektoru (Brána,
+  745 cest) bez chyb v konzoli. Skály, které jsou v appce zároveň
+  samostatným jménem sektoru (První skála, Kamenné srdce, Chrám, Sputnik,
+  Skalní město), jsou napojené na svá zdrojová data, ne duplikovaná zvlášť.
+- **Další:** 5 sektorů bez dat zůstává (Osamělé kameny, Skály u silnice,
+  Vrchol kopce, Ležky, Žihle) — chybí i na úrovni pozice, natož cest.
+
 ## 2026-08-06 — research konkrétních cest a gradů
 
 - **Co:** Pro všech 13 dosud lokalizovaných sektorů dohledány jednotlivé
