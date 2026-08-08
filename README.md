@@ -54,6 +54,14 @@ sketches drawn at an angle or with a skewed aspect ratio can still be made to fi
 - **Real climbing data** — queries the Overpass API live for `sport=climbing`, `climbing=*`
   and rock/cliff features in the current view. This is the ground truth to align against, and
   it comes from OSM rather than from this repo.
+- **Offline maps** — pick an area (any located sector by name, or the current view),
+  a radius and a detail level, and the tiles are downloaded into the browser. The
+  panel estimates tiles and megabytes before you commit. Saved tiles are then
+  preferred over the network, so a downloaded area draws with no signal at all;
+  areas are listed with their real size and can be deleted individually. The page
+  itself is cached by a service worker, because saved tiles are no use if the thing
+  that draws them cannot load. Tiles are stored **per base map** — download the layer
+  you actually intend to use at the crag.
 - **Add a sector by coordinates** — type a name and paste the numbers. Decimal or
   degrees–minutes–seconds, either order, with or without `N/S/E/W`, Czech decimal
   commas included. What was understood is echoed back under the field *before* you
@@ -102,8 +110,12 @@ over ~2 km of forest around it. It points at the right woodland, not at a crag.
 
 ## Notes
 
-- Tiles and Overpass need a connection. Export GPX before you lose signal in the forest —
-  the area has patchy coverage.
+- Overpass needs a connection. Tiles do not, once you have saved the area — but save it
+  before you leave, and export GPX too; the area has patchy coverage.
+- Downloading is throttled to four requests at a time and capped at 6000 tiles per area.
+  Tile servers are donated infrastructure and their usage policies forbid bulk
+  downloading, so grab the sector you are going to climb, once — not the whole region,
+  repeatedly. Storing tiles for a personal trip is what the cap is sized for.
 - Overlay images are stored as data URLs in `localStorage`, which browsers cap at around
   5 MB. Downscale big screenshots, or keep alignments in a saved project file instead.
 - Ruler walking time assumes ~65 m/min, i.e. slow going on forest paths with a pad.
@@ -111,6 +123,9 @@ over ~2 km of forest around it. It points at the right woodland, not at a crag.
 ## Development
 
 `index.html` is the whole application — vanilla JS, no dependencies, works from `file://`.
+The one other file is `sw.js`, the service worker that caches the page for offline use;
+it needs a secure origin, so it registers over https (or localhost) and is skipped
+entirely on `file://`, where the page is local anyway.
 The map is a small purpose-built slippy map (Web Mercator projection, tile grid, marker layer)
 plus a 4-point homography solved by Gaussian elimination and applied as a CSS `matrix3d`.
 

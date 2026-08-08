@@ -1,3 +1,34 @@
+## 2026-08-08 — offline mapy (stáhnout oblast, např. Žihle)
+
+- **Co:** Nová sekce „Offline maps“. Vybereš oblast (kterýkoliv lokalizovaný
+  sektor jménem, nebo aktuální výřez), poloměr a úroveň detailu; panel předem
+  spočítá počet dlaždic a odhad MB, pak se to stáhne do prohlížeče. Uložené
+  dlaždice mají při vykreslování přednost před sítí, takže stažená oblast
+  kreslí i s vypnutým signálem. Seznam uložených oblastí ukazuje skutečnou
+  velikost a jde po jedné mazat. Odznak „Offline“ nahoře, když není signál.
+- **Kde to je uložené:** IndexedDB, ne localStorage — jedna oblast jsou desítky
+  MB, localStorage má strop kolem pěti. Klíč je `layer/z/x/y`, tedy přesně ten,
+  který si renderer stejně skládá. V paměti se drží `savedKeys`, aby se dalo
+  synchronně rozhodnout, jestli má smysl sahat do databáze; když není uloženo
+  nic, jde všechno rovnou na síť jako dřív.
+- **Druhá půlka:** `sw.js` — service worker, který cachuje samotnou stránku.
+  Uložené dlaždice jsou k ničemu, když se nenačte to, co je kreslí. Strategie
+  network-first, takže online vždycky dostaneš aktuální deploy a offline ten
+  poslední, co se načetl. Dlaždice přes SW **záměrně** neběží: neprůhledné
+  cross-origin odpovědi si některé prohlížeče v kvótě započítávají s obrovským
+  paddingem, takže by to rozbilo rozpočet i hlášená čísla.
+- **Etická poznámka, ne detail:** hromadné stahování dlaždic je proti usage
+  policy dárcovských serverů (OSM to zakazuje výslovně). Proto strop 6000
+  dlaždic na oblast, čtyři requesty naráz, přeskakování už stažených a věta
+  o tom přímo v panelu. Cílem je stáhnout sektor, který jedeš lézt, jednou.
+- **Stav:** 21 kontrol proti lokálnímu tile serveru — odhad reaguje na ovládání,
+  velká oblast se odmítne, stáhne se přesně to, co se slíbilo, druhý běh
+  nestahuje nic, s vypnutou sítí se uložené dlaždice kreslí z databáze a
+  dekódují, neuložená oblast neservíruje nic starého, přežije reload, mazání
+  funguje, a stránka se **s vypnutou sítí otevře**. Celkem 160 v sedmi sadách.
+- **Vedlejší oprava:** registrace SW měla podmínku jen `https:`, což vynechává
+  `localhost`, který prohlížeče taky berou jako secure context. Odhalil test.
+
 ## 2026-08-08 — ztráta ručně přidaných sektorů (nahlásil Jiří)
 
 - **Symptom:** „přidal jsem pár sektorů a zmizely.“

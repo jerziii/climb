@@ -114,6 +114,13 @@
   .addsec{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
   .addsec input[type=text]{width:100%;margin-bottom:5px}
   .echo{font-size:11px;color:var(--dim)}
+  .lbl2{color:var(--dim);font-size:11.5px}
+  .prog{height:5px;background:#232733;border-radius:3px;overflow:hidden;margin-top:9px}
+  .prog>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+  #offline{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:6;
+    background:rgba(180,120,20,.92);color:#1a1206;font-size:11.5px;font-weight:600;
+    padding:3px 10px;border-radius:20px;display:none}
+  #offline.on{display:block}
   .echo.good{color:var(--ok)}
   .echo.bad{color:var(--bad)}
   .hint b{color:var(--ink);font-weight:600}
@@ -296,6 +303,40 @@
     </details>
 
     <details>
+      <summary>Offline maps</summary>
+      <div class="sec">
+        <p class="hint" style="margin-top:0">Save an area now, read it in the forest with no signal.
+        Tiles are stored in the browser, per base map — download the layer you actually intend to use.</p>
+        <div class="row" style="margin-top:8px">
+          <select id="offArea"></select>
+        </div>
+        <div class="row">
+          <span class="lbl2">Radius</span><select id="offRadius">
+            <option value="0.5">500 m</option>
+            <option value="1" selected>1 km</option>
+            <option value="2">2 km</option>
+            <option value="4">4 km</option>
+          </select>
+          <span class="lbl2">Detail</span><select id="offZoom">
+            <option value="16">to z16</option>
+            <option value="17" selected>to z17</option>
+            <option value="18">to z18</option>
+          </select>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="pri sm" id="offSave">Download</button>
+          <button class="sm" id="offCancel" style="display:none">Cancel</button>
+          <span id="offEst" class="echo"></span>
+        </div>
+        <div id="offProg" class="prog" style="display:none"><div id="offBar"></div></div>
+        <div id="offList"></div>
+        <p class="hint">Downloading is rate-limited on purpose. Tile servers are donated
+        infrastructure and bulk scraping is against their usage policies — keep areas small
+        and grab them once, not repeatedly.</p>
+      </div>
+    </details>
+
+    <details>
       <summary>Real climbing data (OSM)</summary>
       <div class="sec">
         <div class="row">
@@ -340,6 +381,7 @@
 </aside>
 <button id="panelToggle" class="sm">☰</button>
 <div id="attrib">—</div>
+<div id="offline">Offline — saved tiles only</div>
 
 <script>
 "use strict";
@@ -543,8 +585,59 @@ function load() {
 }
 
 /* ---------------------------------------------------------------- tiles */
+/* ==================================================================== offline
+   Saved tiles live in IndexedDB, not localStorage: a single area is tens of
+   megabytes and localStorage caps out around five. Keys are the same
+   "layer/z/x/y" string the renderer already uses, so a saved tile is found by
+   the identity the map was going to ask for anyway.
+
+   `savedKeys` mirrors the keys in memory so the renderer can decide
+   synchronously whether a tile is worth an async lookup. With nothing saved it
+   is empty and every tile goes straight to the network, exactly as before. */
+const TILE_DB = "petrohrad-tiles", TILE_ST = "tiles";
+const savedKeys = new Set();
+let dbPromise = null;
+
+function tiledb() {
+  if (!dbPromise) dbPromise = new Promise((res, rej) => {
+    if (!self.indexedDB) return rej(new Error("no indexedDB"));
+    const r = indexedDB.open(TILE_DB, 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains(TILE_ST)) {
+        const os = d.createObjectStore(TILE_ST, { keyPath: "k" });
+        os.createIndex("area", "a", { unique: false });
+      }
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }).catch(e => { dbPromise = null; throw e; });
+  return dbPromise;
+}
+function tx(mode, fn) {
+  return tiledb().then(d => new Promise((res, rej) => {
+    const t = d.transaction(TILE_ST, mode), st = t.objectStore(TILE_ST);
+    let out;
+    try { out = fn(st); } catch (e) { return rej(e); }
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    t.onerror = t.onabort = () => rej(t.error);
+  }));
+}
+const getTile = k => tx("readonly", st => st.get(k));
+async function loadSavedKeys() {
+  try {
+    const keys = await tx("readonly", st => st.getAllKeys());
+    savedKeys.clear();
+    (keys || []).forEach(k => savedKeys.add(k));
+  } catch (e) { /* no IndexedDB: offline saving is simply unavailable */ }
+}
+
 const tileCache = new Map();
 const badLayer = {};
+function tileUrl(L, z, x, y) {
+  const u = L.url.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+  return L.sub ? u.replace("{s}", L.sub[(x + y) % L.sub.length]) : u;
+}
 function renderTiles() {
   const L = LAYERS[S.layer];
   const tz = clamp(Math.round(S.zoom), MINZ, Math.min(MAXZ, L.max));
@@ -573,10 +666,16 @@ function renderTiles() {
           img.style.display = "none";
           if (!badLayer[S.layer]) { badLayer[S.layer] = true; drawLists(); }
         };
-        let u = L.url.replace("{z}", tz).replace("{x}", wx).replace("{y}", y);
-        if (L.sub) u = u.replace("{s}", L.sub[(wx + y) % L.sub.length]);
-        img.src = u;
+        const u = tileUrl(L, tz, wx, y);
         tileCache.set(key, img);
+        if (savedKeys.has(key)) {
+          // saved copy wins, so a downloaded area renders with no signal at all
+          getTile(key).then(rec => {
+            if (tileCache.get(key) !== img) return;          // panned away meanwhile
+            if (rec && rec.b) { img._blob = URL.createObjectURL(rec.b); img.src = img._blob; }
+            else img.src = u;
+          }).catch(() => { if (tileCache.get(key) === img) img.src = u; });
+        } else img.src = u;
         elTiles.appendChild(img);
       }
       img.style.left = (x * size - ox) + "px";
@@ -585,7 +684,10 @@ function renderTiles() {
     }
   }
   for (const [key, img] of tileCache) {
-    if (!want.has(key)) { img.remove(); tileCache.delete(key); }
+    if (!want.has(key)) {
+      if (img._blob) URL.revokeObjectURL(img._blob);   // or every pan leaks a blob
+      img.remove(); tileCache.delete(key);
+    }
   }
   $("#attrib").textContent = L.attr;
 }
@@ -1317,6 +1419,8 @@ function drawLists() {
     drawLists();
   });
 
+  offAreas();   // a sector added or removed is an offline area gained or lost
+
   // pins
   $("#pinList").innerHTML = S.pins.map(p => `
     <div class="item">
@@ -1333,6 +1437,172 @@ function drawLists() {
   });
 }
 $("#sectorSearch").oninput = drawLists;
+
+/* ------------------------------------------------------- offline downloads */
+const TILE_BYTES = 22000;     // rough per-tile average, for the pre-download estimate
+const MAX_TILES = 6000;       // a hard stop: past this you are scraping, not caching
+
+/* Which tiles cover a lat/lng box, from an overview zoom up to the chosen
+   detail. Counting is split from listing because the estimate is recomputed on
+   every redraw — including while you pan with "Current view" selected — and
+   building a few thousand objects each frame is not free. */
+function tileRanges(bbox, zMax, layerMax) {
+  const out = [];
+  for (let z = 11; z <= Math.min(zMax, layerMax); z++) {
+    const a = project(bbox.n, bbox.w, z), b = project(bbox.s, bbox.e, z);
+    const n = Math.pow(2, z);
+    out.push({ z, n,
+      x0: Math.floor(a.x / TILE), x1: Math.floor(b.x / TILE),
+      y0: Math.max(0, Math.floor(a.y / TILE)), y1: Math.min(n - 1, Math.floor(b.y / TILE)) });
+  }
+  return out;
+}
+const countTiles = (bbox, zMax, layerMax) => tileRanges(bbox, zMax, layerMax)
+  .reduce((s, r) => s + Math.max(0, r.x1 - r.x0 + 1) * Math.max(0, r.y1 - r.y0 + 1), 0);
+
+function tilesFor(bbox, zMax, layerMax) {
+  const out = [];
+  for (const r of tileRanges(bbox, zMax, layerMax))
+    for (let x = r.x0; x <= r.x1; x++)
+      for (let y = r.y0; y <= r.y1; y++)
+        out.push({ z: r.z, x: ((x % r.n) + r.n) % r.n, y });
+  return out;
+}
+function bboxAround(lat, lng, km) {
+  const dLat = km / 111.32, dLng = km / (111.32 * Math.cos(lat * Math.PI / 180));
+  return { n: lat + dLat, s: lat - dLat, w: lng - dLng, e: lng + dLng };
+}
+function offTarget() {
+  const v = $("#offArea").value;
+  if (v === "__view__") return { name: `View ${S.center.lat.toFixed(3)}, ${S.center.lng.toFixed(3)}`,
+                                 lat: S.center.lat, lng: S.center.lng };
+  const c = S.sectors[v];
+  return c ? { name: v, lat: c.lat, lng: c.lng } : null;
+}
+function offBox() {
+  const t = offTarget();
+  return t ? { t, box: bboxAround(t.lat, t.lng, +$("#offRadius").value), L: LAYERS[S.layer] } : null;
+}
+function offPlan() {
+  const b = offBox();
+  if (!b) return null;
+  return { ...b.t, tiles: tilesFor(b.box, +$("#offZoom").value, b.L.max),
+           layer: S.layer, layerName: b.L.name };
+}
+function offEstimate() {
+  const el = $("#offEst"), b = offBox();
+  if (!b || downloading) return;
+  const n = countTiles(b.box, +$("#offZoom").value, b.L.max);
+  const over = n > MAX_TILES;
+  el.className = "echo" + (over ? " bad" : "");
+  el.textContent = over
+    ? `${n} tiles — too many, reduce radius or detail`
+    : `${n} tiles · ~${(n * TILE_BYTES / 1e6).toFixed(0)} MB · ${b.L.name}`;
+}
+
+let offAbort = false, downloading = false;
+async function offDownload() {
+  const p = offPlan();
+  if (!p) return toast("Pick an area first");
+  if (p.tiles.length > MAX_TILES)
+    return toast(`${p.tiles.length} tiles is too many — reduce the radius or the detail`);
+  try { await tiledb(); } catch (e) { return toast("This browser cannot store offline maps"); }
+
+  offAbort = false; downloading = true;
+  $("#offSave").disabled = true;
+  $("#offCancel").style.display = "";
+  $("#offProg").style.display = "";
+  let done = 0, failed = 0, bytes = 0;
+  const total = p.tiles.length;
+  const L = LAYERS[p.layer];
+
+  // Four at a time, not four hundred. These are donated tile servers.
+  const queue = p.tiles.slice();
+  const worker = async () => {
+    while (queue.length && !offAbort) {
+      const t = queue.shift();
+      const key = `${p.layer}/${t.z}/${t.x}/${t.y}`;
+      try {
+        if (!savedKeys.has(key)) {
+          const r = await fetch(tileUrl(L, t.z, t.x, t.y), { mode: "cors", cache: "force-cache" });
+          if (!r.ok) throw new Error(r.status);
+          const b = await r.blob();
+          if (!b.size) throw new Error("empty");
+          await tx("readwrite", st => st.put({ k: key, a: p.name, l: p.layer, b, s: b.size }));
+          savedKeys.add(key); bytes += b.size;
+        }
+      } catch (e) { failed++; }
+      done++;
+      $("#offBar").style.width = (done / total * 100).toFixed(1) + "%";
+      if (done % 10 === 0) $("#offEst").textContent = `${done}/${total}…`;
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+
+  downloading = false;
+  $("#offSave").disabled = false;
+  $("#offCancel").style.display = "none";
+  $("#offProg").style.display = "none";
+  $("#offBar").style.width = "0";
+  offEstimate();
+  await offRefresh();
+  draw();
+  const mb = (bytes / 1e6).toFixed(1);
+  toast(offAbort ? `Stopped — kept ${done - failed} tiles`
+    : failed ? `Saved ${total - failed}/${total} tiles (${mb} MB). ${failed} failed — the server may block bulk requests.`
+             : `“${p.name}” saved for offline use — ${total} tiles, ${mb} MB`);
+}
+
+/* Saved areas, summarised straight from the store so the list cannot drift. */
+async function offRefresh() {
+  const el = $("#offList");
+  let recs = [];
+  try { recs = await tx("readonly", st => st.getAll()) || []; }
+  catch (e) { el.innerHTML = ""; return; }
+  const by = new Map();
+  for (const r of recs) {
+    const g = by.get(r.a) || { n: 0, s: 0, l: r.l };
+    g.n++; g.s += r.s || 0; by.set(r.a, g);
+  }
+  el.innerHTML = by.size ? [...by].map(([name, g]) => `
+    <div class="item">
+      <span class="nm">${esc(name)}</span>
+      <span class="tag">${g.n} tiles · ${(g.s / 1e6).toFixed(1)} MB</span>
+      <button class="sm" data-offdel="${esc(name)}">✕</button>
+    </div>`).join("")
+    : `<p class="hint">Nothing saved yet.</p>`;
+  el.querySelectorAll("[data-offdel]").forEach(b => b.onclick = async () => {
+    const name = b.dataset.offdel;
+    if (!confirm(`Delete the saved tiles for “${name}”?`)) return;
+    await tx("readwrite", st => {
+      const rq = st.index("area").openCursor(IDBKeyRange.only(name));
+      rq.onsuccess = () => { const c = rq.result; if (c) { savedKeys.delete(c.value.k); c.delete(); c.continue(); } };
+    });
+    await offRefresh(); draw(); toast(`Deleted “${name}”`);
+  });
+}
+let offAreaSig = null;
+function offAreas() {
+  const sel = $("#offArea"), cur = sel.value;
+  const names = Object.keys(S.sectors).sort((a, b) => a.localeCompare(b, "cs"));
+  const sig = names.join("|");
+  if (sig !== offAreaSig) {          // rebuilding every frame would fight the dropdown
+    offAreaSig = sig;
+    sel.innerHTML = `<option value="__view__">Current view</option>`
+      + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+  offEstimate();
+}
+["#offArea", "#offRadius", "#offZoom"].forEach(s => $(s).onchange = offEstimate);
+$("#offSave").onclick = offDownload;
+$("#offCancel").onclick = () => { offAbort = true; };
+
+function setOnline() {
+  $("#offline").classList.toggle("on", !navigator.onLine);
+}
+window.addEventListener("online", () => { setOnline(); draw(); });
+window.addEventListener("offline", setOnline);
 
 /* Add a sector from typed coordinates. The echo below the field shows what was
    actually understood — including any lat/lng reorder — so nothing is committed
@@ -1479,6 +1749,20 @@ load();
 if (!S.topos.length && !S.pins.length) { S.center = { lat: HOME.lat, lng: HOME.lng }; S.zoom = HOME.zoom; }
 activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
 draw();
+
+/* Offline comes up after the first paint: the map must never wait on a database.
+   Once the saved keys are known, redraw so saved tiles replace network ones. */
+setOnline();
+offAreas();
+loadSavedKeys().then(() => { if (savedKeys.size) draw(); offRefresh(); });
+
+/* Caches the page itself, so the app opens with no signal — saved tiles are no
+   use if the thing that draws them cannot load. Network-first, so a deploy is
+   picked up whenever there is a connection. Not available from file://. */
+const secureCtx = location.protocol === "https:"
+  || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+if ("serviceWorker" in navigator && secureCtx)
+  navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
 </html>
