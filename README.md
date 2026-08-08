@@ -73,7 +73,11 @@ sketches drawn at an angle or with a skewed aspect ratio can still be made to fi
   compass, a cone on the dot shows the direction you are facing.
 - **Pins, ruler** (distance + rough walking time), **GPX / GeoJSON export**, and a
   **project file** that round-trips everything including the overlay images.
-- Jump buttons to open the current view in Mapy.cz or OpenStreetMap.
+- **Open a sector in Mapy.cz** — every located sector has a **Mapy ↗** button in the
+  index, and tapping its marker gives a popup with the same. The link drops you on
+  that exact point rather than the general area, so the Mapy app offers *Navigate*
+  straight away. Pins do the same. Jump buttons for the current view in Mapy.cz or
+  OpenStreetMap are still under Pins & export.
 
 State lives in `localStorage`, so closing the tab doesn't lose your alignment. Use
 **Save project** for a real backup or to hand the alignment to someone else.

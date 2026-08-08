@@ -1,3 +1,29 @@
+## 2026-08-08 — proklik do Mapy.cz + oprava neklikatelných markerů
+
+- **Co:** Každý lokalizovaný sektor má v indexu tlačítko „Mapy ↗“ a marker na
+  mapě po ťuknutí otevře popup (jméno, souřadnice, Mapy.cz, Copy) — sektorové
+  markery do teď žádný popup neměly. Piny dostaly stejné tlačítko. Odkaz
+  staví na tvaru, který v repu byl a funguje (`turisticka?x=lng&y=lat&z=`),
+  a přidává `source=coor&id=lng,lat`, což z toho udělá vybraný bod, takže
+  appka v telefonu rovnou nabídne Navigovat. Ta druhá půlka je aditivní —
+  souřadnice jsou i v x/y, takže když ji Mapy někdy přestanou brát, mapa se
+  pořád otevře na správném místě, jen bez špendlíku.
+- **Vedlejší nález — pre-existující chyba:** popupy markerů nešly otevřít
+  prstem **nikdy**. `map.setPointerCapture` při panování přesměruje následný
+  `click` na mapu, takže posluchač na markeru se nikdy nespustil — týkalo se
+  to pinů (Rename/Copy/Delete) i OSM prvků, ne jen nových sektorů. Opraveno
+  tím, že `onClick()` si sáhne přes `document.elementFromPoint` pro to, co je
+  reálně pod prstem, a zavolá `_tap` markeru. Volá se jen když se pointer
+  skoro nehnul, takže tažení přes marker dál normálně posouvá mapu.
+- **Slepá ulička, ať se neopakuje:** první oprava byla „nezabírat pointer,
+  když stisk padne na `.mk`“. Vypadá čistě, ale rozbije posouvání mapy ve
+  chvíli, kdy začneš táhnout přes vlastní polohovou tečku — a ta je po
+  zapnutí GPS přesně uprostřed obrazovky. Odhalil to až běh starší sady
+  testů. Na tuhle regresi je teď vlastní test.
+- **Stav:** 26 kontrol na proklik (tvar URL včetně x=lng/y=lat i pro záporné
+  souřadnice, tlačítko v seznamu, popup markeru, escapování ošklivého jména,
+  piny, tažení z markeru pořád posouvá). Celkem 123 napříč pěti sadami.
+
 ## 2026-08-08 — přidávání sektoru přes souřadnice
 
 - **Co:** Do panelu Sector index přibyl formulář jméno + souřadnice. Parser

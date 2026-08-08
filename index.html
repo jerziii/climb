@@ -691,7 +691,8 @@ function renderMarkers() {
     for (const f of osmFeats) addMarker(f.lat, f.lng, f.name, "osm", () => popupOsm(f));
     if (!showLbl) elMk.querySelectorAll(".osm .lbl").forEach(e => e.remove());
   }
-  for (const [name, c] of Object.entries(S.sectors)) addMarker(c.lat, c.lng, name, "sector");
+  for (const [name, c] of Object.entries(S.sectors))
+    addMarker(c.lat, c.lng, name, "sector", () => popupSector(name, c));
   for (const p of S.pins) addMarker(p.lat, p.lng, p.name, "pin", () => popupPin(p));
   for (const r of ruler) addMarker(r.lat, r.lng, "", "pin");
   if (me) addMe();
@@ -720,7 +721,9 @@ function addMarker(lat, lng, label, cls, onclick) {
   d.style.left = p.x + "px"; d.style.top = p.y + "px";
   d.innerHTML = `<div class="dot"></div>` + (label ? `<div class="lbl"></div>` : "");
   if (label) d.querySelector(".lbl").textContent = label;
-  if (onclick) d.addEventListener("click", e => { e.stopPropagation(); onclick(); });
+  // Not a click listener: panning takes pointer capture, which retargets the
+  // click to the map and swallowed it. onClick() hit-tests for this instead.
+  if (onclick) d._tap = onclick;
   elMk.appendChild(d);
 }
 
@@ -741,12 +744,38 @@ function popupOsm(f) {
      <div style="margin-top:7px"><button class="sm" onclick="pinHere(${f.lat},${f.lng},'${esc(f.name || "rock").replace(/'/g, "\\'")}')">Pin this</button>
      <button class="sm" onclick="copyCoord(${f.lat},${f.lng})">Copy coords</button></div>`);
 }
+/* ------------------------------------------------------------ hand-off to Mapy
+   The x/y/z half is the same link the Mapy.cz button under Export has always
+   used, so the view is certain to land in the right place — note x is longitude
+   and y is latitude, which is exactly why pasted Mapy links are not parsed back.
+   `source=coor&id=` is the half that turns it into a selected point, so the
+   phone app opens its detail card with Navigate on it. That half is additive:
+   the coordinates are repeated in the x/y params, so if it is ever ignored the
+   map still opens on the sector instead of breaking.
+
+   On a phone, an https://mapy.cz link is claimed by the Mapy app when it is
+   installed, so this opens the app rather than the browser. */
+function mapyUrl(lat, lng, z = 17) {
+  const x = lng.toFixed(6), y = lat.toFixed(6);
+  return `https://mapy.cz/turisticka?source=coor&id=${x}%2C${y}&x=${x}&y=${y}&z=${z}`;
+}
+function openMapyAt(lat, lng) { window.open(mapyUrl(lat, lng), "_blank", "noopener"); }
+
+function popupSector(name, c) {
+  showPopup(c.lat, c.lng,
+    `<h4>${esc(name)}</h4>
+     <table><tr><td class="k">lat</td><td>${c.lat.toFixed(6)}</td></tr>
+     <tr><td class="k">lon</td><td>${c.lng.toFixed(6)}</td></tr></table>
+     <div style="margin-top:7px"><button class="sm" onclick="openMapyAt(${c.lat},${c.lng})">Mapy.cz ↗</button>
+     <button class="sm" onclick="copyCoord(${c.lat},${c.lng})">Copy</button></div>`);
+}
 function popupPin(p) {
   showPopup(p.lat, p.lng,
     `<h4>${esc(p.name)}</h4>
      <table><tr><td class="k">lat</td><td>${p.lat.toFixed(6)}</td></tr>
      <tr><td class="k">lon</td><td>${p.lng.toFixed(6)}</td></tr></table>
-     <div style="margin-top:7px"><button class="sm" onclick="renamePin('${p.id}')">Rename</button>
+     <div style="margin-top:7px"><button class="sm" onclick="openMapyAt(${p.lat},${p.lng})">Mapy.cz ↗</button>
+     <button class="sm" onclick="renamePin('${p.id}')">Rename</button>
      <button class="sm" onclick="copyCoord(${p.lat},${p.lng})">Copy</button>
      <button class="sm" onclick="delPin('${p.id}')">Delete</button></div>`);
 }
@@ -825,7 +854,13 @@ function onClick(e) {
     }
     draw(); return;
   }
-  if (!e.target.closest(".mk")) hidePopup();
+  // Pointer capture during panning makes e.target the map even when you tapped a
+  // marker, so ask the document what is actually under the finger. Reached only
+  // when the pointer barely moved, so dragging across a marker still just pans.
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  const mk = under && under.closest(".mk");
+  if (mk && mk._tap) { mk._tap(); return; }
+  hidePopup();
 }
 
 map.addEventListener("wheel", e => {
@@ -1243,6 +1278,7 @@ function drawLists() {
         <span class="nm">${esc(n)}</span>
         ${c ? '<span class="tag found">located</span>' : ""}
         <button class="sm" data-go="${esc(n)}">${c ? "Go" : "Place"}</button>
+        ${c ? `<button class="sm" data-mapy="${esc(n)}" title="Open this sector in Mapy.cz">Mapy ↗</button>` : ""}
         ${c ? `<button class="sm" data-clr="${esc(n)}">✕</button>` : ""}
       </div>
       ${rd ? `<button class="sm" data-routes="${esc(n)}" style="margin:2px 0 6px">${openRoutes.has(n) ? "Hide routes" : total ? `Routes (${total})` : `Sectors (${rd.b.length})`}</button>` : ""}
@@ -1254,6 +1290,10 @@ function drawLists() {
     const n = b.dataset.go, c = S.sectors[n];
     if (c) { S.center = { lat: c.lat, lng: c.lng }; S.zoom = Math.max(S.zoom, 17); save(); draw(); }
     else { setMode("place:" + n); toast(`Click the map to place “${n}”`); }
+  });
+  $("#sectorList").querySelectorAll("[data-mapy]").forEach(b => b.onclick = () => {
+    const c = S.sectors[b.dataset.mapy];
+    if (c) openMapyAt(c.lat, c.lng);
   });
   $("#sectorList").querySelectorAll("[data-clr]").forEach(b => b.onclick = () => {
     delete S.sectors[b.dataset.clr]; save(); draw();
