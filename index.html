@@ -497,9 +497,25 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /* ---------------------------------------------------------- persistence */
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify(S)); }
-  catch (e) { toast("Could not save — storage full (big overlay images?)"); }
+  try { localStorage.setItem(STORE, JSON.stringify(S)); return true; }
+  catch (e) { toast("Could not save — storage full (big overlay images?)"); return false; }
 }
+/* Every path that replaces S wholesale — startup, project import, reset — must
+   leave it the same shape. It did not: reset rebuilt S without `seeded`, so the
+   next "add sector" threw on S.seeded.includes() after writing the sector but
+   before save(), and the sector vanished on reload with nothing on screen to
+   say so. One function now guarantees the shape, and all three paths call it. */
+function normaliseState() {
+  if (!S.center || typeof S.center.lat !== "number") S.center = { lat: HOME.lat, lng: HOME.lng };
+  if (typeof S.zoom !== "number") S.zoom = HOME.zoom;
+  if (!Array.isArray(S.pins)) S.pins = [];
+  if (!Array.isArray(S.topos)) S.topos = [];
+  if (!S.sectors || typeof S.sectors !== "object") S.sectors = {};
+  // Legacy state predating the ledger is migrated from what it holds, so a
+  // default deleted back then reappears once, and only once.
+  if (!Array.isArray(S.seeded)) S.seeded = Object.keys(DEFAULT_SECTORS).filter(n => S.sectors[n]);
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(STORE);
@@ -510,14 +526,11 @@ function load() {
     }
     const o = JSON.parse(raw);
     S = Object.assign(S, o);
-    S.pins = S.pins || []; S.topos = S.topos || []; S.sectors = S.sectors || {};
+    normaliseState();
     // Sectors researched since this browser last saved would otherwise never
     // reach anyone who has already used the app — the seed only ever ran for a
     // blank slate. `seeded` records which defaults have been offered, so a
     // sector you delete stays deleted instead of returning on every reload.
-    // State written before this ledger existed is migrated from what it holds,
-    // so a default deleted back then reappears once, and only once.
-    if (!Array.isArray(S.seeded)) S.seeded = Object.keys(DEFAULT_SECTORS).filter(n => S.sectors[n]);
     let added = 0;
     for (const [n, c] of Object.entries(DEFAULT_SECTORS)) {
       if (S.seeded.includes(n)) continue;
@@ -1360,12 +1373,17 @@ function addSectorByCoords() {
     return;
   const moved = !!S.sectors[name];
   S.sectors[name] = { lat: c.lat, lng: c.lng };
+  if (!Array.isArray(S.seeded)) S.seeded = [];         // never let bookkeeping throw mid-edit
   if (!S.seeded.includes(name)) S.seeded.push(name);   // never re-seed over a hand-placed sector
   S.center = { lat: c.lat, lng: c.lng };
   S.zoom = Math.max(S.zoom, 17);
-  save(); draw();
+  const stored = save();
+  draw();
   $("#newSecName").value = ""; $("#newSecCoords").value = ""; echoCoords();
-  toast(`${moved ? "Moved" : "Added"} “${name}”`);
+  // A sector that is on screen but not in storage is the worst case: it looks
+  // fine until the next reload takes it away. Say so at the moment it happens.
+  toast(stored ? `${moved ? "Moved" : "Added"} “${name}”`
+               : `“${name}” is on the map but could NOT be saved — it will be gone on reload`);
 }
 $("#addSector").onclick = addSectorByCoords;
 [$("#newSecName"), $("#newSecCoords")].forEach(el =>
@@ -1424,6 +1442,7 @@ $("#projFile").onchange = e => {
     try {
       const o = JSON.parse(fr.result);
       S = Object.assign(S, o);
+      normaliseState();   // project files written before a field existed lack it
       for (const [, img] of topoImgs) img.remove();
       topoImgs.clear();
       activeTopo = S.topos[0]?.id || null;
@@ -1437,7 +1456,8 @@ $("#wipe").onclick = () => {
   if (!confirm("Delete all overlays, pins and sector positions?")) return;
   localStorage.removeItem(STORE);
   S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
-        pins: [], topos: [], sectors: {} };
+        pins: [], topos: [], sectors: {}, seeded: [] };
+  normaliseState();
   for (const [, img] of topoImgs) img.remove();
   topoImgs.clear(); activeTopo = null; osmFeats = []; draw();
 };

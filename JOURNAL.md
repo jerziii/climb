@@ -1,3 +1,28 @@
+## 2026-08-08 — ztráta ručně přidaných sektorů (nahlásil Jiří)
+
+- **Symptom:** „přidal jsem pár sektorů a zmizely.“
+- **Příčina:** tlačítko „Reset everything“ (`#wipe`) skládalo `S` znovu ručně
+  a vynechalo pole `seeded`, které přibylo s předchozí změnou. Následné
+  přidání sektoru pak spadlo na `S.seeded.includes()` — ale až *po* zápisu
+  `S.sectors[name]` a *před* `save()`. Sektor se tím pádem objevil v paměti,
+  ale nikdy se neuložil, a při reloadu byl pryč. Bez jediné hlášky, protože
+  výjimka jen ukončila handler. Reprodukováno: wipe → přidat → reload → nic.
+- **Oprava:** jedna funkce `normaliseState()`, která garantuje tvar `S`, a
+  volá se ze **všech tří** míst, co `S` přepisují celé — `load()`, `#wipe`
+  i import projektu. Plus pojistka na místě zápisu, aby účetnictví kolem
+  `seeded` nikdy neshodilo rozdělanou editaci.
+- **Navíc:** `save()` teď vrací úspěch a přidání sektoru to použije. Když se
+  uložení nepovede (plné úložiště od velkých overlayů), řekne se rovnou
+  „je na mapě, ale NEuložilo se — po reloadu bude pryč“ místo obecné hlášky,
+  kterou jde přehlédnout. Sektor na mapě, který není v úložišti, je nejhorší
+  stav — vypadá v pořádku až do chvíle, kdy zmizí.
+- **Poučení:** ručně skládaný resetovaný objekt vedle rostoucího tvaru stavu
+  je časovaná bomba. Každé nové pole v `S` musí projít `normaliseState()`,
+  ne se dopisovat na tři místa.
+- **Stav:** 14 nových kontrol (wipe→přidat→reload, čtyři sektory po sobě ve
+  všech formátech, starý projektový soubor, stav bez polí, selhání uložení).
+  Celkem 139 v šesti sadách.
+
 ## 2026-08-08 — proklik do Mapy.cz + oprava neklikatelných markerů
 
 - **Co:** Každý lokalizovaný sektor má v indexu tlačítko „Mapy ↗“ a marker na
