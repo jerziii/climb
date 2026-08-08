@@ -1,3 +1,29 @@
+## 2026-08-08 — přidávání sektoru přes souřadnice
+
+- **Co:** Do panelu Sector index přibyl formulář jméno + souřadnice. Parser
+  bere desetinný zápis i stupně-minuty-vteřiny, v libovolném pořadí, s N/S/E/W
+  před i za číslem, a české desetinné čárky. Pod polem se živě vypisuje, co
+  se z toho přečetlo — včetně případného prohození lat/lng — takže se na mapu
+  nedostane nic, co uživatel předtím neviděl zpátky. Nová jména se sdružují
+  do skupiny „Added by you“, která se odvozuje z `S.sectors` (žádný další
+  stav k udržování), takže smazání sektoru je totéž co jeho odebrání ze
+  seznamu. Zadání jména, které už v indexu je, sektor **přesune** (s
+  potvrzením), místo aby vzniklo skoro stejné jméno vedle.
+- **Vědomé odmítnutí:** odkazy na mapy se zásadně neparsují. mapy.cz má
+  v query pořadí lng-lat, Google lat-lng — špatný odhad posadí bod o údolí
+  vedle a nic neřekne. Formulář to řekne rovnou („paste the numbers, not
+  a link“) místo aby hádal. Stejná logika jako u zbytku appky: radši žádná
+  souřadnice než věrohodně vypadající špatná.
+- **Stav:** 33 unit testů samotného parseru (desetinné, DMS, DM, hemisféry,
+  obrácené pořadí, čárky, mimo rozsah, minuty ≥60, URL) + 24 kontrol v
+  Chromiu (přidání, DMS, uložení, přežití reloadu, export do GPX, fuzzy
+  match jména, odmítnutí, živý echo). Doběhly i obě starší sady beze změny.
+- **Poznámka:** test parseru odhalil, že `"95.0, 13.3"` skončí jako
+  lat 13.3 / lng 95 — 95 nemůže být zeměpisná šířka, takže se to čte jako
+  zápis lng-first. Je to stejné pravidlo, které správně zpracuje Sydney
+  (`151.2, -33.9`), a echo to ukáže před potvrzením. Chyba byla v testu,
+  ne v kódu.
+
 ## 2026-08-08 — Žihle + poloha na mapě (následování, směr pohledu)
 
 - **Co (mapa):** Opraveno chování tlačítka ◎. `watchPosition` dřív při *každé*

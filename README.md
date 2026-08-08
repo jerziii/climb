@@ -54,6 +54,14 @@ sketches drawn at an angle or with a skewed aspect ratio can still be made to fi
 - **Real climbing data** — queries the Overpass API live for `sport=climbing`, `climbing=*`
   and rock/cliff features in the current view. This is the ground truth to align against, and
   it comes from OSM rather than from this repo.
+- **Add a sector by coordinates** — type a name and paste the numbers. Decimal or
+  degrees–minutes–seconds, either order, with or without `N/S/E/W`, Czech decimal
+  commas included. What was understood is echoed back under the field *before* you
+  commit it, so a reordered lat/lng is visible rather than silent. Typing a name
+  already in the index moves that sector instead of creating a near-duplicate; new
+  names collect under **Added by you**. Map links are refused on purpose — mapy.cz
+  orders its query lng-first and Google orders it lat-first, and guessing wrong puts
+  the pin in the next valley without saying so.
 - **Sector index** — the guidebook sector names (Větrná hůrka, Pod hradem, Hřbitovní kameny,
   Malý Yosemite, Skalní město, Osamělé kameny, Potoční kameny, …). A name goes green when it
   matches something in the OSM data you loaded; otherwise you place it yourself.
@@ -74,8 +82,8 @@ State lives in `localStorage`, so closing the tab doesn't lose your alignment. U
 
 **No sector coordinates are hardcoded in this repo.** The sector list is names only.
 
-Positions come from exactly two places: OSM data you fetch at runtime, and points you place
-yourself. That is deliberate — a guessed coordinate on a climbing map is worse than no
+Positions come from exactly three places: OSM data you fetch at runtime, points you place
+by clicking, and coordinates you type in yourself. That is deliberate — a guessed coordinate on a climbing map is worse than no
 coordinate, because it looks authoritative while sending you into the wrong part of the forest.
 The one coordinate baked in is the area centroid used as the initial map view.
 

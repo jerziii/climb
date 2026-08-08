@@ -110,6 +110,12 @@
   input[type=range]{width:100%;accent-color:var(--accent)}
   input[type=search]{width:100%}
   .hint{color:var(--dim);font-size:11.5px;margin:7px 0 0}
+  .hint code{font-size:11px;background:#232733;border:1px solid var(--line);border-radius:3px;padding:0 3px}
+  .addsec{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+  .addsec input[type=text]{width:100%;margin-bottom:5px}
+  .echo{font-size:11px;color:var(--dim)}
+  .echo.good{color:var(--ok)}
+  .echo.bad{color:var(--bad)}
   .hint b{color:var(--ink);font-weight:600}
   ol.steps{margin:6px 0 0;padding-left:18px;color:var(--dim);font-size:11.5px}
   ol.steps li{margin:4px 0}
@@ -223,6 +229,23 @@
         <input type="search" id="sectorSearch" placeholder="Filter sectors…">
         <label class="opt"><input type="checkbox" id="highlightEasy"> Highlight easy routes (grade ≤5) &amp; show extra info</label>
         <div id="sectorList"></div>
+
+        <div class="addsec">
+          <p class="hint" style="margin:0 0 6px"><b>Add a sector by coordinates</b></p>
+          <input type="text" id="newSecName" list="secNames" placeholder="Sector or boulder name" autocomplete="off">
+          <datalist id="secNames"></datalist>
+          <input type="text" id="newSecCoords" placeholder="50.065961, 13.341427" autocomplete="off">
+          <div class="row" style="margin-top:6px">
+            <button class="sm pri" id="addSector">Add sector</button>
+            <span id="newSecEcho" class="echo"></span>
+          </div>
+          <p class="hint">Decimal or degrees–minutes–seconds, in either order, with or
+          without N/S/E/W: <code>50.065961, 13.341427</code> · <code>50°3'57.5"N 13°20'29.1"E</code> ·
+          <code>50,0660 13,3414</code>. Typing a name that is already in the index moves
+          that sector instead of adding a second one. Paste the numbers, not a map
+          link — a link's coordinate order cannot be trusted.</p>
+        </div>
+
         <p class="hint">Names collected from the Petrohrad guidebook / planetmountain / ČHS listings. Starting positions for the researched sectors come from ČHS / theCrag / OSM (see <b>research/petrohrad-boulders.md</b> for sourcing and confidence per sector) — a sector also turns green when a live OSM match is found; sectors with no source anywhere still need <b>Place</b> and a click on the map once you've identified them under an overlay.</p>
       </div>
     </details>
@@ -1061,6 +1084,51 @@ out center tags;`;
   $("#fetchOsm").disabled = false;
 }
 const norm = s => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+
+/* --------------------------------------------------------- coordinate input
+   Coordinates arrive in whatever shape their source used: a decimal pair off a
+   guidebook page, degrees-minutes-seconds from a phone, a hemisphere letter on
+   either side, a Czech decimal comma. All of those are accepted, in either
+   order. Returns {lat,lng}, or null for "not recognised" \u2014 never a guess, and
+   never a silently reordered pair, because a plausible wrong coordinate is the
+   one failure mode this whole app is built to avoid.
+
+   Map links are deliberately refused rather than parsed: mapy.cz orders its
+   query lng-then-lat and Google orders it lat-then-lng, and picking wrong
+   swaps the pin into the next valley without telling you. */
+function looksLikeUrl(s) { return /:\/\/|\bwww\.|[?&](?:x|y|q|ll|lat|lon|lng)=/i.test(s); }
+const guidebookNames = () => new Set(SECTORS.flatMap(g => g.n));
+
+function parseLatLng(str) {
+  if (str == null) return null;
+  let s = String(str).trim();
+  if (!s || looksLikeUrl(s)) return null;
+  // Czech decimal comma ("50,0660 13,3414") \u2014 only when no dot is there to disagree
+  if (!s.includes(".") && (s.match(/\d,\d/g) || []).length === 2) s = s.replace(/,/g, ".");
+
+  // one component: [hemisphere] degrees [\u00b0 minutes [' seconds ["]]] [hemisphere]
+  const re = /([NSEW])?\s*(-?\d+(?:\.\d+)?)\s*(?:[\u00b0\u00ba]\s*(\d+(?:\.\d+)?)?\s*(?:['\u2032]\s*(\d+(?:\.\d+)?)?\s*["\u2033]?)?)?\s*([NSEW])?/gi;
+  const out = [];
+  let m;
+  while (out.length < 2 && (m = re.exec(s)) !== null) {
+    const lead = m[1];
+    // "N50 E13": that trailing E opens the next coordinate, it does not close this one
+    if (lead && m[5]) re.lastIndex -= m[5].length;
+    const hemi = (lead || m[5] || "").toUpperCase();
+    const deg = +m[2], min = m[3] ? +m[3] : 0, sec = m[4] ? +m[4] : 0;
+    if (min >= 60 || sec >= 60) return null;
+    let v = Math.abs(deg) + min / 60 + sec / 3600;
+    if (deg < 0 || hemi === "S" || hemi === "W") v = -v;
+    out.push({ v, hemi });
+  }
+  if (out.length < 2 || /\d/.test(s.slice(re.lastIndex))) return null;  // two numbers, no more
+  let [a, b] = out;
+  if (a.hemi === "E" || a.hemi === "W" || b.hemi === "N" || b.hemi === "S") [a, b] = [b, a];
+  else if (Math.abs(a.v) > 90 && Math.abs(b.v) <= 90) [a, b] = [b, a];   // written lng-first
+  if (!isFinite(a.v) || !isFinite(b.v)) return null;
+  if (Math.abs(a.v) > 90 || Math.abs(b.v) > 180) return null;
+  return { lat: a.v, lng: b.v };
+}
 function matchSectors() {
   let hit = 0;
   for (const grp of SECTORS) for (const name of grp.n) {
@@ -1158,9 +1226,15 @@ function drawLists() {
     $("#lockBtn").classList.toggle("on", !!act.locked);
   }
 
-  // sectors
+  // sectors — the guidebook groups, plus anything you added yourself. That last
+  // group is derived from S.sectors rather than stored, so deleting the sector
+  // is the same act as removing it from the list.
   const q = norm($("#sectorSearch").value || "");
-  $("#sectorList").innerHTML = SECTORS.map(g => {
+  const known = guidebookNames();
+  const mine = Object.keys(S.sectors).filter(n => !known.has(n)).sort((a, b) => a.localeCompare(b, "cs"));
+  const groups = mine.length ? SECTORS.concat([{ g: "Added by you", n: mine }]) : SECTORS;
+  $("#secNames").innerHTML = [...known].map(n => `<option value="${esc(n)}">`).join("");
+  $("#sectorList").innerHTML = groups.map(g => {
     const rows = g.n.filter(n => !q || norm(n).includes(q)).map(n => {
       const c = S.sectors[n];
       const rd = ROUTES[n];
@@ -1206,6 +1280,56 @@ function drawLists() {
   });
 }
 $("#sectorSearch").oninput = drawLists;
+
+/* Add a sector from typed coordinates. The echo below the field shows what was
+   actually understood — including any lat/lng reorder — so nothing is committed
+   to the map that you have not seen read back to you first. */
+function echoCoords() {
+  const el = $("#newSecEcho"), raw = $("#newSecCoords").value.trim();
+  if (!raw) { el.className = "echo"; el.textContent = ""; return null; }
+  const c = parseLatLng(raw);
+  if (c) {
+    el.className = "echo good";
+    el.textContent = `→ ${c.lat.toFixed(6)}, ${c.lng.toFixed(6)}`;
+  } else {
+    el.className = "echo bad";
+    el.textContent = looksLikeUrl(raw) ? "paste the numbers, not a link" : "not recognised";
+  }
+  return c;
+}
+$("#newSecCoords").oninput = echoCoords;
+
+function addSectorByCoords() {
+  const nameRaw = $("#newSecName").value.trim();
+  const coordRaw = $("#newSecCoords").value.trim();
+  if (!nameRaw) { toast("Give the sector a name"); $("#newSecName").focus(); return; }
+  const c = parseLatLng(coordRaw);
+  if (!c) {
+    toast(looksLikeUrl(coordRaw)
+      ? "Paste the coordinates themselves — a map link's lat/lng order is not reliable"
+      : "Coordinates not recognised — try 50.065961, 13.341427");
+    $("#newSecCoords").focus();
+    return;
+  }
+  // Typing an existing name moves that sector rather than making a near-duplicate
+  // one character different from it.
+  const name = [...guidebookNames(), ...Object.keys(S.sectors)]
+    .find(n => norm(n) === norm(nameRaw)) || nameRaw;
+  if (S.sectors[name] &&
+      !confirm(`“${name}” is already placed at ${S.sectors[name].lat.toFixed(5)}, ${S.sectors[name].lng.toFixed(5)}.\n\nMove it to ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}?`))
+    return;
+  const moved = !!S.sectors[name];
+  S.sectors[name] = { lat: c.lat, lng: c.lng };
+  if (!S.seeded.includes(name)) S.seeded.push(name);   // never re-seed over a hand-placed sector
+  S.center = { lat: c.lat, lng: c.lng };
+  S.zoom = Math.max(S.zoom, 17);
+  save(); draw();
+  $("#newSecName").value = ""; $("#newSecCoords").value = ""; echoCoords();
+  toast(`${moved ? "Moved" : "Added"} “${name}”`);
+}
+$("#addSector").onclick = addSectorByCoords;
+[$("#newSecName"), $("#newSecCoords")].forEach(el =>
+  el.addEventListener("keydown", e => { if (e.key === "Enter") addSectorByCoords(); }));
 $("#highlightEasy").onchange = e => { highlightEasy = e.target.checked; drawLists(); };
 $("#addPin").onclick = () => { setMode(mode === "pin" ? null : "pin"); toast("Click the map to drop a pin"); };
 $("#ruler").onclick = () => { setMode(mode === "ruler" ? null : "ruler"); if (mode) toast("Click two points"); draw(); };
