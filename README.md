@@ -57,6 +57,12 @@ sketches drawn at an angle or with a skewed aspect ratio can still be made to fi
 - **Sector index** — the guidebook sector names (Větrná hůrka, Pod hradem, Hřbitovní kameny,
   Malý Yosemite, Skalní město, Osamělé kameny, Potoční kameny, …). A name goes green when it
   matches something in the OSM data you loaded; otherwise you place it yourself.
+- **Where you are, and which way you are pointing** — the ◎ button cycles through
+  three states: off → *following* (the map tracks you) → *located* (the dot keeps
+  updating, the map stays where you put it). Panning, pinching or wheel-zooming drops
+  you out of following on its own, so a GPS fix never yanks the view back while you
+  are reading the map. Tap again to come back to yourself. When the device has a
+  compass, a cone on the dot shows the direction you are facing.
 - **Pins, ruler** (distance + rough walking time), **GPX / GeoJSON export**, and a
   **project file** that round-trips everything including the overlay images.
 - Jump buttons to open the current view in Mapy.cz or OpenStreetMap.
@@ -76,6 +82,11 @@ The one coordinate baked in is the area centroid used as the initial map view.
 Sector names were taken from the public Petrohrad listings (planetmountain, ČHS/skalnioblasti,
 the *Petrohrad a okolí* guidebook). Spelling follows those sources; treat the index as a
 checklist to locate, not as verified positions.
+
+One exception is flagged where it lives: the **Žihle** entry in `DEFAULT_SECTORS` is an
+area centroid from a single uncorroborated source, and the four Žihle sectors are spread
+over ~2 km of forest around it. It points at the right woodland, not at a crag.
+`research/zihle-sector.md` explains what is known, how well, and what is missing.
 
 ## Notes
 

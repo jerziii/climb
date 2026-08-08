@@ -1,3 +1,38 @@
+## 2026-08-08 — Žihle + poloha na mapě (následování, směr pohledu)
+
+- **Co (mapa):** Opraveno chování tlačítka ◎. `watchPosition` dřív při *každé*
+  aktualizaci polohy přepsal `S.center` a vynutil zoom ≥16, takže se mapa po
+  zapnutí polohy nedala posunout — vždycky se vrátila zpátky na uživatele.
+  Navíc každé ťuknutí spustilo další watcher, který se nikdy nerušil. Teď má
+  tlačítko tři stavy (vypnuto → následuje → jen zobrazuje) a tažení, pinch
+  nebo zoom kolečkem následování samo shodí, tečka se ale dál aktualizuje.
+  Přidán kužel směru pohledu z kompasu (iOS `webkitCompassHeading` +
+  `requestPermission` z gesta, Android `deviceorientationabsolute`/alpha,
+  korekce o `screen.orientation.angle`), fallback na GPS kurz jen za pohybu.
+- **Co (Žihle):** Odkaz v zadání (theCrag area 3181150992) není Žihle, ale
+  **Sklárna sever** — jeden ze čtyř sektorů uvnitř Žihle. Zpracované obě
+  úrovně: ČHS oblast 139 = Viklany (61 skal/701 cest), Bába a Dědek (25/348),
+  Sklárna Sever (33/347), Sklárna Jih (30/326), celkem 149 skal a 1722 cest.
+  Do appky doplněn souřadnicový bod Žihle, čtyři podsektory s odkazy a všech
+  33 jmen skal Sklárny Sever.
+- **Stav:** Mapová část ověřena v Chromiu přes Playwright — 32 kontrol včetně
+  té podstatné (mapa po zapanování zůstane stát i přes další GPS fixy),
+  rotace kuželu pro sever/východ/jih/západ a odolnosti watcheru vůči
+  výpadku signálu. Testem se našla a opravila chyba: původní error handler
+  vypínal polohu při jakékoliv chybě, včetně běžného výpadku pod stromy —
+  teď se ukončuje jen při zamítnutém oprávnění.
+- **Ošklivá věc, kterou je potřeba vědět:** všechny zdroje pro Žihle
+  (thecrag.com, horosvaz.cz, padani.eu, climbing-guide.eu) jsou z tohohle
+  stroje blokované egress politikou (403). Data jsou tedy z druhé ruky přes
+  shrnutí z vyhledávače, ne opsaná ze zdrojové stránky jako zbytek
+  `research/`. **Žádné názvy cest ani grady** — proto má Žihle v `ROUTES`
+  jen jména skal a počty a panel to explicitně říká místo aby ukazoval
+  prázdný seznam. Souřadnice oblasti je jednozdrojová, označená jako
+  low–medium. Detailně v `research/zihle-sector.md`.
+- **Další:** Dotáhnout 1722 cest a per-sektorové souřadnice z nezablokovaného
+  spojení (nebo z tištěného průvodce Resch/Sika, který má GPS po balvanech).
+  Bez dat zůstávají Osamělé kameny, Skály u silnice, Vrchol kopce, Ležky.
+
 ## 2026-08-06 — cesty zabudované do appky
 
 - **Co:** Data z `research/petrohrad-routes.md` přeparsována (Python skript,
