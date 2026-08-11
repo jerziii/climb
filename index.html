@@ -106,6 +106,18 @@
   button.sm{padding:3px 7px;font-size:11.5px}
   .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   .row+.row{margin-top:7px}
+
+  /* Two modes, one mechanism: every section carries data-mode, this is the
+     only rule that reads it. No router, no per-mode component tree. */
+  [data-mode]{display:none}
+  body[data-appmode="home"] [data-mode="home"],body[data-appmode="home"] [data-mode="both"],
+  body[data-appmode="crag"] [data-mode="crag"],body[data-appmode="crag"] [data-mode="both"]{display:block}
+  /* Crag rows must be usable with cold fingers and no glasses on a phone in daylight. */
+  .goalrow{padding:12px 10px;font-size:15px}
+  .goalrow input[type=checkbox]{width:22px;height:22px;flex:none}
+  .goalrow .letter{display:inline-block;min-width:20px;font-weight:700;color:var(--accent2)}
+  .goalrow .grade{color:var(--accent);font-weight:600}
+  .goalrow button.sm{padding:8px 12px;font-size:13px}
   label.opt{display:flex;gap:7px;align-items:center;padding:4px 0;cursor:pointer}
   input[type=range]{width:100%;accent-color:var(--accent)}
   input[type=search]{width:100%}
@@ -227,10 +239,41 @@
   <div class="phead">
     <h1>Petrohrad — topo overlay</h1>
     <p>Warp the drawn sector maps onto real satellite imagery.</p>
+    <div class="row" style="margin-top:8px">
+      <button class="sm" data-modebtn="home">Doma</button>
+      <button class="sm" data-modebtn="crag">Na skále</button>
+    </div>
   </div>
   <div class="pbody">
 
-    <details>
+    <details open data-mode="home">
+      <summary>Trip planning</summary>
+      <div class="sec">
+        <div class="row">
+          <select id="tripSelect" style="flex:1;min-width:0"></select>
+          <button class="sm" id="newTrip">+ Nový výlet</button>
+          <button class="sm" id="delTrip">✕</button>
+        </div>
+        <div id="tripSectors" class="row" style="margin-top:8px"></div>
+        <textarea id="tripApproach" placeholder="Poznámka k přístupu (parkování, cesta…)"
+          style="width:100%;margin-top:8px;min-height:50px;font:inherit;color:var(--ink);background:#232733;border:1px solid var(--line);border-radius:6px;padding:6px 9px"></textarea>
+        <div id="tripGoals" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="pri" id="prepTrip">Připravit na cestu</button>
+        </div>
+        <p class="hint">Cíle se přidávají tlačítkem <b>+</b> u jednotlivých cest v <b>Sector index</b> (dole).</p>
+      </div>
+    </details>
+
+    <details open data-mode="crag">
+      <summary>Cíle výletu</summary>
+      <div class="sec">
+        <div id="cragGoals"></div>
+        <p class="hint">Přepni zpět do režimu <b>Doma</b>, chceš-li upravit cíle nebo přidat nový výlet.</p>
+      </div>
+    </details>
+
+    <details data-mode="home">
       <summary>Sector index</summary>
       <div class="sec">
         <input type="search" id="sectorSearch" placeholder="Filter sectors…">
@@ -257,7 +300,7 @@
       </div>
     </details>
 
-    <details open>
+    <details open data-mode="home">
       <summary>How to use</summary>
       <div class="sec">
         <ol class="steps">
@@ -271,7 +314,7 @@
       </div>
     </details>
 
-    <details open>
+    <details open data-mode="both">
       <summary>Base map</summary>
       <div class="sec" id="layerList"></div>
       <div class="sec" style="padding-top:0">
@@ -279,7 +322,7 @@
       </div>
     </details>
 
-    <details open>
+    <details open data-mode="home">
       <summary>Topo overlays</summary>
       <div class="sec">
         <div class="drop" id="drop">
@@ -306,7 +349,7 @@
       </div>
     </details>
 
-    <details>
+    <details data-mode="home">
       <summary>Offline maps</summary>
       <div class="sec">
         <p class="hint" style="margin-top:0">Save an area now, read it in the forest with no signal.
@@ -340,7 +383,7 @@
       </div>
     </details>
 
-    <details>
+    <details data-mode="home">
       <summary>Real climbing data (OSM)</summary>
       <div class="sec">
         <div class="row">
@@ -353,7 +396,7 @@
       </div>
     </details>
 
-    <details>
+    <details data-mode="home">
       <summary>Pins &amp; export</summary>
       <div class="sec">
         <div class="row">
@@ -560,6 +603,15 @@ function normaliseState() {
   // Legacy state predating the ledger is migrated from what it holds, so a
   // default deleted back then reappears once, and only once.
   if (!Array.isArray(S.seeded)) S.seeded = Object.keys(DEFAULT_SECTORS).filter(n => S.sectors[n]);
+  if (S.mode !== "home" && S.mode !== "crag") S.mode = "home";
+  if (!Array.isArray(S.trips)) S.trips = [];
+  for (const t of S.trips) {
+    if (!Array.isArray(t.sectors)) t.sectors = [];
+    if (!Array.isArray(t.goals)) t.goals = [];
+    if (typeof t.approach !== "string") t.approach = "";
+  }
+  if (typeof S.trip !== "string" || !S.trips.some(t => t.id === S.trip))
+    S.trip = S.trips[0]?.id || null;
 }
 
 function load() {
@@ -584,7 +636,15 @@ function load() {
       if (!S.sectors[n]) { S.sectors[n] = { ...c }; added++; }
     }
     if (added) setTimeout(() => toast(`Added ${added} newly researched sector(s)`), 400);
+    // uid is one shared counter across every kind of id ("t"/"p"/"tr"/"g" + N) —
+    // it must scan ALL of them, not just topos, or two different entities can
+    // land on the same numeric suffix and deleting one deletes both.
     for (const t of S.topos) uid = Math.max(uid, (+String(t.id).replace(/\D/g, "") || 0) + 1);
+    for (const p of S.pins) uid = Math.max(uid, (+String(p.id).replace(/\D/g, "") || 0) + 1);
+    for (const tr of S.trips) {
+      uid = Math.max(uid, (+String(tr.id).replace(/\D/g, "") || 0) + 1);
+      for (const g of tr.goals) uid = Math.max(uid, (+String(g.id).replace(/\D/g, "") || 0) + 1);
+    }
     for (const t of S.topos) if (t.src && t.src.startsWith("media:"))
       mediaUid = Math.max(mediaUid, (+t.src.slice(7).replace(/\D/g, "") || 0) + 1);
   } catch (e) { /* corrupt state must never brick the map */ }
@@ -1404,10 +1464,11 @@ function routesPanel(n) {
   const boulders = d.b.map(b => {
     // An entry with no routes is not an empty boulder — it is one whose route
     // list was never sourced. Say which, and list the rock names if we have them.
-    const rs = b.r.length ? b.r.map(r => {
+    const rs = b.r.length ? b.r.map((r, ri) => {
       const easy = highlightEasy && easyGrade(r[1]);
       const note = easy && r[2] ? ` <i>(${esc(r[2])})</i>` : "";
-      return `<span class="rt${easy ? " easy" : ""}"><b>${esc(r[0])}</b> ${esc(r[1] || "—")}${note}</span>`;
+      const add = `<button class="sm addGoal" data-sector="${esc(n)}" data-boulder="${esc(b.n)}" data-ri="${ri}" data-route="${esc(r[0])}" data-grade="${esc(r[1] || "")}" title="Přidat jako cíl výletu">+</button>`;
+      return `<span class="rt${easy ? " easy" : ""}"><b>${esc(r[0])}</b> ${esc(r[1] || "—")}${note}${add}</span>`;
     }).join(" · ")
     : `<span class="norts">${b.k ? `skály: ${b.k.map(esc).join(" · ")}`
         : "jednotlivé cesty nejsou v datech"}</span>`;
@@ -1512,6 +1573,10 @@ function drawLists() {
     if (openRoutes.has(n)) openRoutes.delete(n); else openRoutes.add(n);
     drawLists();
   });
+  $("#sectorList").querySelectorAll(".addGoal").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    addGoal(b.dataset.sector, b.dataset.boulder, +b.dataset.ri, b.dataset.route, b.dataset.grade);
+  });
 
   offAreas();   // a sector added or removed is an offline area gained or lost
 
@@ -1531,6 +1596,195 @@ function drawLists() {
   });
 }
 $("#sectorSearch").oninput = drawLists;
+
+/* --------------------------------------------------------------- modes */
+/* The mode toggle is the whole router: set S.mode, flip the body attribute the
+   [data-mode] CSS rule reads, done. No section is a component with its own
+   visibility logic. */
+function setAppMode(m) {
+  S.mode = m; save();
+  document.body.dataset.appmode = m;
+  document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === m));
+  drawTrip();
+}
+document.querySelectorAll("[data-modebtn]").forEach(b => b.onclick = () => setAppMode(b.dataset.modebtn));
+
+/* --------------------------------------------------------------- trips */
+/* Goals resolve by (sector, boulder name) — verified unique across all 281
+   boulders — then by the route's index `ri` within that boulder, because
+   route names repeat inside a single boulder (6 collisions in the data:
+   "unnamed", "projekt", "Varianta"...). If the index moved (data re-sourced)
+   fall back to a name search before calling the goal detached. */
+function resolveGoal(g) {
+  const d = ROUTES[g.sector];
+  const b = d && d.b.find(b => b.n === g.boulder);
+  if (!b) return null;
+  if (b.r[g.ri] && b.r[g.ri][0] === g.route) return { b, r: b.r[g.ri] };
+  const found = b.r.find(r => r[0] === g.route);
+  return { b, r: found || null };   // boulder still there; exact route may be gone
+}
+
+function addGoal(sector, boulder, ri, route, grade) {
+  const trip = S.trips.find(t => t.id === S.trip);
+  if (!trip) return toast("Nejdřív vyber nebo vytvoř výlet");
+  if (trip.goals.some(g => g.sector === sector && g.boulder === boulder && g.ri === ri))
+    return toast("Tahle cesta už na výletu je");
+  trip.goals.push({ id: "g" + uid++, sector, boulder, route, ri, letter: "", grade: grade || "", done: false, photo: null });
+  if (!trip.sectors.includes(sector)) trip.sectors.push(sector);
+  save(); drawTrip();
+  toast(`„${route}“ přidáno do ${trip.name}`);
+}
+
+/* Everything below renders trip UI. It is called ONLY from explicit events
+   (mode switch, trip select, goal add/remove) — never from draw() — because
+   draw() runs on every pan/GPS/orientation frame and a re-render here would
+   wipe out whatever you were mid-typing in the approach note or the add-sector
+   field (see drawLists()/draw() for the same trap already in this file). */
+function renderTripSelect() {
+  const sel = $("#tripSelect");
+  sel.innerHTML = S.trips.length
+    ? S.trips.map(t => `<option value="${esc(t.id)}"${t.id === S.trip ? " selected" : ""}>${esc(t.name)} (${t.goals.length})</option>`).join("")
+    : `<option value="">— žádný výlet —</option>`;
+}
+function renderTripSectors(trip) {
+  const el = $("#tripSectors");
+  el.innerHTML = trip.sectors.map(s => `<span class="tag" data-secchip="${esc(s)}" style="cursor:pointer" title="Odebrat ze seznamu">${esc(s)}${S.sectors[s] ? "" : " ⚠"} ✕</span>`).join("")
+    + `<input type="text" id="tripAddSector" list="secNames" placeholder="+ sektor, Enter">`;
+  el.querySelectorAll("[data-secchip]").forEach(c => c.onclick = () => {
+    trip.sectors = trip.sectors.filter(s => s !== c.dataset.secchip);
+    save(); drawTrip();
+  });
+  $("#tripAddSector").onkeydown = e => {
+    if (e.key !== "Enter" || !e.target.value.trim()) return;
+    const name = e.target.value.trim();
+    if (!trip.sectors.includes(name)) trip.sectors.push(name);
+    save(); drawTrip();
+  };
+}
+function renderTripGoals(trip) {
+  const el = $("#tripGoals");
+  if (!trip.goals.length) { el.innerHTML = `<p class="hint">Zatím žádné cíle — použij tlačítko + u cesty v Sector index.</p>`; return; }
+  const byBoulder = new Map();
+  for (const g of trip.goals) {
+    const key = g.sector + "|" + g.boulder;
+    (byBoulder.get(key) || byBoulder.set(key, []).get(key)).push(g);
+  }
+  el.innerHTML = [...byBoulder.entries()].map(([key, goals]) => {
+    const [sector, boulder] = key.split("|");
+    const rows = goals.map(g => {
+      const res = resolveGoal(g);
+      const detached = !res || !res.r;
+      return `<div class="item">
+        <input type="checkbox" data-done="${g.id}" ${g.done ? "checked" : ""}>
+        <span class="nm">${esc(g.route)} ${esc(g.grade || "")}${detached ? ' <span class="tag" style="color:var(--bad)">chybí ve zdroji</span>' : ""}</span>
+        <button class="sm" data-delgoal="${g.id}">✕</button>
+      </div>`;
+    }).join("");
+    return `<p class="hint" style="margin-top:8px"><b>${esc(boulder)}</b> — ${esc(sector)}</p>${rows}`;
+  }).join("");
+  el.querySelectorAll("[data-done]").forEach(cb => cb.onchange = () => {
+    trip.goals.find(g => g.id === cb.dataset.done).done = cb.checked; save();
+  });
+  el.querySelectorAll("[data-delgoal]").forEach(b => b.onclick = () => {
+    trip.goals = trip.goals.filter(g => g.id !== b.dataset.delgoal);
+    save(); drawTrip();
+  });
+}
+function drawCragGoals() {
+  const el = $("#cragGoals");
+  const trip = S.trips.find(t => t.id === S.trip);
+  if (!trip) { el.innerHTML = `<p class="hint">Žádný vybraný výlet. Přepni do režimu Doma a vyber nebo vytvoř výlet.</p>`; return; }
+  if (!trip.goals.length) { el.innerHTML = `<p class="hint">Tento výlet nemá žádné cíle.</p>`; return; }
+  el.innerHTML = trip.goals.map(g => {
+    const res = resolveGoal(g);
+    const detached = !res || !res.r;
+    return `<div class="item goalrow">
+      <input type="checkbox" data-cdone="${g.id}" ${g.done ? "checked" : ""}>
+      <span class="letter">${esc(g.letter || "")}</span>
+      <span class="nm">${esc(g.boulder)} — ${esc(g.route)}</span>
+      <span class="grade">${esc(g.grade || "")}</span>
+      ${detached ? '<span class="tag" style="color:var(--bad)">chybí</span>' : ""}
+      <button class="sm" data-gotogoal="${g.id}">Na mapu</button>
+    </div>`;
+  }).join("");
+  el.querySelectorAll("[data-cdone]").forEach(cb => cb.onchange = () => {
+    trip.goals.find(g => g.id === cb.dataset.cdone).done = cb.checked; save();
+  });
+  el.querySelectorAll("[data-gotogoal]").forEach(b => b.onclick = () => {
+    const g = trip.goals.find(g => g.id === b.dataset.gotogoal);
+    const c = S.sectors[g.sector];
+    if (!c) return toast("Tento sektor ještě nemá umístění");
+    S.center = { lat: c.lat, lng: c.lng }; S.zoom = Math.max(S.zoom, 17); save(); draw();
+    setAppMode("home");   // the map lives in the full panel, not the crag goal list
+  });
+}
+function drawTrip() {
+  renderTripSelect();
+  const trip = S.trips.find(t => t.id === S.trip);
+  if (trip) {
+    $("#tripApproach").value = trip.approach || "";
+    renderTripSectors(trip);
+    renderTripGoals(trip);
+  } else {
+    $("#tripApproach").value = "";
+    $("#tripSectors").innerHTML = "";
+    $("#tripGoals").innerHTML = `<p class="hint">Vytvoř výlet tlačítkem „+ Nový výlet“.</p>`;
+  }
+  drawCragGoals();
+}
+$("#tripSelect").onchange = e => { S.trip = e.target.value || null; save(); drawTrip(); };
+$("#newTrip").onclick = () => {
+  const name = prompt("Název výletu", "Výlet " + (S.trips.length + 1));
+  if (name === null) return;
+  const t = { id: "tr" + uid++, name: name || "Výlet", sectors: [], approach: "", goals: [] };
+  S.trips.push(t); S.trip = t.id; save(); drawTrip();
+};
+$("#delTrip").onclick = () => {
+  const trip = S.trips.find(t => t.id === S.trip); if (!trip) return;
+  if (!confirm(`Smazat výlet „${trip.name}“ a jeho cíle?`)) return;
+  S.trips = S.trips.filter(t => t.id !== trip.id);
+  S.trip = S.trips[0]?.id || null;
+  save(); drawTrip();
+};
+$("#tripApproach").onchange = e => {
+  const trip = S.trips.find(t => t.id === S.trip); if (!trip) return;
+  trip.approach = e.target.value; save();
+};
+
+function gpxDoc(w) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="petrohrad-topo-overlay" xmlns="http://www.topografix.com/GPX/1/1">
+${w.map(p => `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}">
+    <name>${esc(p.name)}</name>
+    <desc>${esc(p.desc)}</desc>
+  </wpt>`).join("\n")}
+</gpx>`;
+}
+/* One button instead of five steps: download every trip sector's tiles, then
+   export a GPX for the goals, then say plainly what it could not do rather
+   than skip it quietly. Boulder-level GPS (book data, a later step) will let
+   waypoints sit on the actual boulder; until then every one falls back to its
+   sector's coordinates. */
+async function prepareTrip() {
+  const trip = S.trips.find(t => t.id === S.trip);
+  if (!trip) return toast("Nejdřív vyber nebo vytvoř výlet");
+  const missing = [];
+  for (const s of trip.sectors) {
+    if (!S.sectors[s]) { missing.push(`sektor „${s}“ nemá souřadnice`); continue; }
+    $("#offArea").value = s;
+    offEstimate();
+    await offDownload();
+  }
+  for (const g of trip.goals) if (!resolveGoal(g)?.r) missing.push(`cíl „${g.route}“ (${g.boulder}) nebyl v datech nalezen`);
+  const w = trip.goals.map(g => {
+    const c = S.sectors[g.sector];
+    return c ? { lat: c.lat, lng: c.lng, name: `${g.boulder} — ${g.route}`, desc: g.sector } : null;
+  }).filter(Boolean);
+  if (w.length) download(`${(trip.name || "vylet").replace(/[^a-z0-9]+/gi, "-")}.gpx`, gpxDoc(w), "application/gpx+xml");
+  else missing.push("žádný cíl s umístěným sektorem pro GPX export");
+  toast(missing.length ? `Připraveno s výhradami: ${missing.join("; ")}` : `Výlet „${trip.name}“ připraven — mapy staženy, GPX exportováno`);
+}
+$("#prepTrip").onclick = prepareTrip;
 
 /* ------------------------------------------------------- offline downloads */
 const TILE_BYTES = 22000;     // rough per-tile average, for the pre-download estimate
@@ -1774,14 +2028,7 @@ function waypoints() {
 $("#expGpx").onclick = () => {
   const w = waypoints();
   if (!w.length) return toast("Nothing to export yet");
-  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="petrohrad-topo-overlay" xmlns="http://www.topografix.com/GPX/1/1">
-${w.map(p => `  <wpt lat="${p.lat.toFixed(6)}" lon="${p.lng.toFixed(6)}">
-    <name>${esc(p.name)}</name>
-    <desc>${esc(p.desc)}</desc>
-  </wpt>`).join("\n")}
-</gpx>`;
-  download("petrohrad.gpx", gpx, "application/gpx+xml");
+  download("petrohrad.gpx", gpxDoc(w), "application/gpx+xml");
   toast(`Exported ${w.length} waypoints — import into Mapy.cz, Locus or OsmAnd`);
 };
 $("#expGeo").onclick = () => {
@@ -1838,13 +2085,16 @@ $("#projFile").onchange = e => {
   e.target.value = "";
 };
 $("#wipe").onclick = () => {
-  if (!confirm("Delete all overlays, pins, sector positions and locally stored images?")) return;
+  if (!confirm("Delete all overlays, pins, sector positions, trips and locally stored images?")) return;
   localStorage.removeItem(STORE);
   S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
-        pins: [], topos: [], sectors: {}, seeded: [] };
+        pins: [], topos: [], sectors: {}, seeded: [], mode: "home", trips: [], trip: null };
   normaliseState();
   for (const [id] of topoImgs) removeTopoImg(id);
   activeTopo = null; osmFeats = []; draw();
+  document.body.dataset.appmode = S.mode;
+  document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === S.mode));
+  drawTrip();
   clearMedia().catch(() => {});
 };
 
@@ -1864,6 +2114,9 @@ addEventListener("keydown", e => {
 load();
 if (!S.topos.length && !S.pins.length) { S.center = { lat: HOME.lat, lng: HOME.lng }; S.zoom = HOME.zoom; }
 activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
+document.body.dataset.appmode = S.mode;
+document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === S.mode));
+drawTrip();
 draw();
 
 /* Offline comes up after the first paint: the map must never wait on a database.
