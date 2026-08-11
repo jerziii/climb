@@ -110,11 +110,16 @@
   .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   .row+.row{margin-top:7px}
 
-  /* Two modes, one mechanism: every section carries data-mode, this is the
-     only rule that reads it. No router, no per-mode component tree. */
+  /* Three tabs, one mechanism: every section carries data-mode with its tab
+     key, applyTabVisibility() adds .tabon to the ones belonging to the active
+     tab. Hidden is the CSS default so nothing flashes before the script runs,
+     and a fourth tab needs no new CSS — just a data-mode value and a button. */
   [data-mode]{display:none}
-  body[data-appmode="home"] [data-mode="home"],body[data-appmode="home"] [data-mode="both"],
-  body[data-appmode="crag"] [data-mode="crag"],body[data-appmode="crag"] [data-mode="both"]{display:block}
+  [data-mode].tabon{display:block}
+  #tabbar{gap:4px;margin-top:9px}
+  #tabbar button{flex:1;padding:7px 4px;text-align:center}
+  #tabbar button.on{background:#232733;border-color:var(--accent);color:var(--accent);font-weight:600}
+  @media (pointer:coarse){#tabbar button{padding:10px 4px}}
   /* Crag rows must be usable with cold fingers and no glasses on a phone in daylight. */
   .goalrow{padding:12px 10px;font-size:15px}
   .goalrow input[type=checkbox]{width:22px;height:22px;flex:none}
@@ -245,17 +250,15 @@
   <div class="phead">
     <h1>Petrohrad — topo overlay</h1>
     <p>Warp the drawn sector maps onto real satellite imagery.</p>
-    <div class="row" style="margin-top:8px">
-      <button class="sm" data-modebtn="home">Doma</button>
-      <button class="sm" data-modebtn="crag">Na skále</button>
+    <div class="row" id="tabbar">
+      <button class="sm" data-tabbtn="trip">Výlet</button>
+      <button class="sm" data-tabbtn="crag">Na skále</button>
+      <button class="sm" data-tabbtn="setup">Nastavení</button>
     </div>
   </div>
   <div class="pbody">
 
-    <div class="pgroup">
-      <div class="glabel">V poli / na výletě</div>
-
-    <details open data-mode="home">
+    <details open data-mode="trip">
       <summary>Trip planning</summary>
       <div class="sec">
         <div class="row">
@@ -281,11 +284,11 @@
       <summary>Cíle výletu</summary>
       <div class="sec">
         <div id="cragGoals"></div>
-        <p class="hint">Přepni zpět do režimu <b>Doma</b>, chceš-li upravit cíle nebo přidat nový výlet.</p>
+        <p class="hint">Přepni na kartu <b>Výlet</b>, chceš-li upravit cíle nebo přidat nový výlet.</p>
       </div>
     </details>
 
-    <details open data-mode="home">
+    <details open data-mode="setup">
       <summary>How to use</summary>
       <div class="sec">
         <ol class="steps">
@@ -299,7 +302,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
+    <details data-mode="setup">
       <summary>Scan guidebook page (OCR)</summary>
       <div class="sec">
         <input type="file" id="ocrFileCam" accept="image/*" capture="environment" hidden>
@@ -321,7 +324,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
+    <details data-mode="trip">
       <summary>Pins &amp; export</summary>
       <div class="sec">
         <div class="row">
@@ -349,12 +352,7 @@
       </div>
     </details>
 
-    </div>
-
-    <div class="pgroup">
-      <div class="glabel">Nastavení mapy — jednou</div>
-
-    <details data-mode="home" id="sectorIndexDetails">
+    <details data-mode="trip" id="sectorIndexDetails">
       <summary>Sector index</summary>
       <div class="sec">
         <input type="search" id="sectorSearch" placeholder="Filter sectors…">
@@ -381,7 +379,7 @@
       </div>
     </details>
 
-    <details data-mode="both">
+    <details data-mode="setup">
       <summary>Base map</summary>
       <div class="sec" id="layerList"></div>
       <div class="sec" style="padding-top:0">
@@ -389,7 +387,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
+    <details data-mode="setup">
       <summary>Topo overlays</summary>
       <div class="sec">
         <div class="drop" id="drop">
@@ -416,7 +414,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
+    <details data-mode="setup">
       <summary>Offline maps</summary>
       <div class="sec">
         <p class="hint" style="margin-top:0">Save an area now, read it in the forest with no signal.
@@ -450,7 +448,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
+    <details data-mode="setup">
       <summary>Real climbing data (OSM)</summary>
       <div class="sec">
         <div class="row">
@@ -462,8 +460,6 @@
         <p class="hint" id="osmStat">Queries the Overpass API for <b>sport=climbing</b>, <b>climbing=*</b> and rock/cliff features in the current view. Czech crags are decently mapped — this is the ground truth to align your topo against.</p>
       </div>
     </details>
-
-    </div>
 
   </div>
 </aside>
@@ -484,6 +480,7 @@ const STORE = "petrohrad-map-v1";
 /* Centre of the Petrohrad granite: the area centroid quoted by the Czech
    listings (~470 m a.s.l.). Sector positions are NOT guessed anywhere. */
 const HOME = { lat: 50.1200, lng: 13.4490, zoom: 15 };
+const TABS = ["trip", "crag", "setup"];
 
 const LAYERS = {
   esri: { name:"Satellite (Esri)", url:"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -644,7 +641,10 @@ function normaliseState() {
   // Legacy state predating the ledger is migrated from what it holds, so a
   // default deleted back then reappears once, and only once.
   if (!Array.isArray(S.seeded)) S.seeded = Object.keys(DEFAULT_SECTORS).filter(n => S.sectors[n]);
-  if (S.mode !== "home" && S.mode !== "crag") S.mode = "home";
+  // S.mode ("home"/"crag") predates the 3-tab split; migrate it once so saved
+  // state and exported project files from before this change keep working.
+  if (S.mode) { if (!S.tab) S.tab = S.mode === "crag" ? "crag" : "trip"; delete S.mode; }
+  if (!TABS.includes(S.tab)) S.tab = "trip";
   if (!Array.isArray(S.trips)) S.trips = [];
   for (const t of S.trips) {
     if (!Array.isArray(t.sectors)) t.sectors = [];
@@ -1720,17 +1720,24 @@ function drawLists() {
 }
 $("#sectorSearch").oninput = drawLists;
 
-/* --------------------------------------------------------------- modes */
-/* The mode toggle is the whole router: set S.mode, flip the body attribute the
-   [data-mode] CSS rule reads, done. No section is a component with its own
-   visibility logic. */
-function setAppMode(m) {
-  S.mode = m; save();
-  document.body.dataset.appmode = m;
-  document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === m));
+/* --------------------------------------------------------------- tabs */
+/* The tab bar is the whole router: set S.tab, mark the sections that belong
+   to it, done. No section is a component with its own visibility logic, and
+   a new tab is one button plus one data-mode value — no new CSS. */
+function applyTabVisibility() {
+  document.querySelectorAll("[data-mode]").forEach(el =>
+    el.classList.toggle("tabon", el.dataset.mode === S.tab));
+  document.querySelectorAll("[data-tabbtn]").forEach(b =>
+    b.classList.toggle("on", b.dataset.tabbtn === S.tab));
+}
+function setTab(t) {
+  if (!TABS.includes(t)) t = "trip";
+  S.tab = t; save();
+  document.body.dataset.tab = t;
+  applyTabVisibility();
   drawTrip();
 }
-document.querySelectorAll("[data-modebtn]").forEach(b => b.onclick = () => setAppMode(b.dataset.modebtn));
+document.querySelectorAll("[data-tabbtn]").forEach(b => b.onclick = () => setTab(b.dataset.tabbtn));
 
 /* --------------------------------------------------------------- trips */
 /* Goals resolve by (sector, boulder name) — verified unique across all 281
@@ -1816,7 +1823,7 @@ function renderTripGoals(trip) {
 function drawCragGoals() {
   const el = $("#cragGoals");
   const trip = S.trips.find(t => t.id === S.trip);
-  if (!trip) { el.innerHTML = `<p class="hint">Žádný vybraný výlet. Přepni do režimu Doma a vyber nebo vytvoř výlet.</p>`; return; }
+  if (!trip) { el.innerHTML = `<p class="hint">Žádný vybraný výlet. Přepni na kartu Výlet a vyber nebo vytvoř výlet.</p>`; return; }
   if (!trip.goals.length) { el.innerHTML = `<p class="hint">Tento výlet nemá žádné cíle.</p>`; return; }
   el.innerHTML = trip.goals.map(g => {
     const res = resolveGoal(g);
@@ -1841,7 +1848,9 @@ function drawCragGoals() {
     const c = S.sectors[g.sector];
     if (!c) return toast("Tento sektor ještě nemá umístění");
     S.center = { lat: c.lat, lng: c.lng }; S.zoom = Math.max(S.zoom, 17); save(); draw();
-    setAppMode("home");   // the map lives in the full panel, not the crag goal list
+    // Show the map, don't leave the checklist: collapse the panel instead of
+    // switching tabs, same as #panelToggle — the viewport just changed size.
+    $("#panel").classList.add("closed"); setTimeout(draw, 200);
   });
 }
 function drawTrip() {
@@ -2523,13 +2532,11 @@ $("#wipe").onclick = () => {
   if (!confirm("Delete all overlays, pins, sector positions, trips, scanned book data and locally stored images?")) return;
   localStorage.removeItem(STORE);
   S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
-        pins: [], topos: [], sectors: {}, seeded: [], mode: "home", trips: [], trip: null, book: {} };
+        pins: [], topos: [], sectors: {}, seeded: [], tab: "trip", trips: [], trip: null, book: {} };
   normaliseState();
   for (const [id] of topoImgs) removeTopoImg(id);
   activeTopo = null; osmFeats = []; draw();
-  document.body.dataset.appmode = S.mode;
-  document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === S.mode));
-  drawTrip();
+  setTab(S.tab);
   clearMedia().catch(() => {});
 };
 
@@ -2549,9 +2556,7 @@ addEventListener("keydown", e => {
 load();
 if (!S.topos.length && !S.pins.length) { S.center = { lat: HOME.lat, lng: HOME.lng }; S.zoom = HOME.zoom; }
 activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
-document.body.dataset.appmode = S.mode;
-document.querySelectorAll("[data-modebtn]").forEach(b => b.classList.toggle("on", b.dataset.modebtn === S.mode));
-drawTrip();
+setTab(S.tab);
 draw();
 
 /* Offline comes up after the first paint: the map must never wait on a database.

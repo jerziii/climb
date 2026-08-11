@@ -1,3 +1,41 @@
+## 2026-08-11 — 3 taby nahradily přepínač Doma/Na skále + skupiny
+
+- **Co:** Radikálnější krok než minulé přeskupení do dvou `.pgroup` skupin —
+  ty jsou teď pryč a nahradil je skutečný tab bar: **Výlet** (Trip planning,
+  Sector index, Pins & export), **Na skále** (Cíle výletu, jediná sekce) a
+  **Nastavení** (How to use, Base map, Topo overlays, Scan guidebook/OCR,
+  Offline maps, Real climbing data). Base map přešlo z `data-mode="both"`
+  čistě do Nastavení — přepínání vrstev v poli bez signálu by vedlo na
+  nestažené dlaždice. `setAppMode()`/`S.mode` nahrazeno `setTab()`/`S.tab`
+  (3 hodnoty přes `TABS` konstantu), viditelnost sekcí řeší JS třída `.tabon`
+  místo CSS `body[data-appmode=...]` selektoru (ten by na 3 taby škáloval
+  jen kombinatoricky). `S.mode` se při načtení jednou zmigruje na `S.tab`,
+  takže staré uložené stavy i exportované projekty dál načtou správný tab.
+  Tlačítko „Na mapu" v Cíle výletu teď sbalí panel (stejně jako `#panelToggle`)
+  místo přepnutí na jiný tab — uprostřed check-listu na skále by tab switch
+  vyhodil na nastavení výletu, což nechceme. Zdvojená synchronizace
+  `dataset.appmode`/`.on` tříd (v `#wipe` a při bootu) sjednocena na jedno
+  volání `setTab(S.tab)`.
+- **Stav:** Ověřeno v prohlížeči (`serve.py` na portu 8080): výchozí tab
+  Výlet, přepínání mezi taby, `+ Přidat cíl (Sector index)` shortcut
+  (funguje i po přesunu Sector index na tab Výlet — `scrollIntoView` na
+  skryté sekci by tiše nedělal nic), sbalení panelu z „Na mapu", persistence
+  aktivního tabu přes reload, migrace starého `mode:"crag"` stavu bez `tab`
+  pole, a `Reset all` přistávající zpět na Výlet. Bez chyb v konzoli.
+- **Další:** Fáze 3 (sjednocení vykreslování cesty/cíle do jedné komponenty,
+  zavřít mezeru — knihovní cesty ze skenu nemají tlačítko + na přidání cíle)
+  je naplánovaná v `~/.claude/plans/go-thru-the-current-woolly-melody.md`,
+  ale zatím neimplementovaná.
+
+## 2026-08-11 — nastavení OCR API klíčů na Vercelu
+
+- **Co:** Dovysvětleno a nastaveno, kam patří `GEMINI_API_KEY`/`ANTHROPIC_API_KEY`
+  a `OCR_SHARED_SECRET` pro `api/ocr.js` — Vercel project Settings →
+  Environment Variables (ne do kódu, ne do repa). Klient posílá stejný
+  secret jako header `X-Climb-Key`, zadává se v UI aplikace.
+- **Stav:** Uživatel potvrdil, že import z fotky guide funguje.
+- **Další:** Nic — OCR flow je hotový a v provozu.
+
 ## 2026-08-11 — přeskupení postranního panelu do dvou skupin
 
 - **Co:** 10 plochých `<details>` sekcí v panelu přeskupeno do dvou
