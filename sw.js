@@ -31,6 +31,11 @@ self.addEventListener("fetch", e => {
   if (req.method !== "GET") return;
   // Same-origin only. Tile hosts are someone else's; leave them to the page.
   if (new URL(req.url).origin !== self.location.origin) return;
+  // The OCR reachability probe is a same-origin GET too — if this cached it,
+  // a later offline (or backend-down) check would replay a stale "reachable"
+  // response instead of failing honestly. API calls always go straight to
+  // the network, cached or not.
+  if (new URL(req.url).pathname.startsWith("/api/")) return;
 
   e.respondWith((async () => {
     try {
