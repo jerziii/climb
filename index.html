@@ -286,6 +286,10 @@
           Drop an image here, click to pick a file,<br>or paste a screenshot with Ctrl/Cmd+V
         </div>
         <input type="file" id="file" accept="image/*" multiple hidden>
+        <div class="row" style="margin-top:8px">
+          <button class="sm" id="migrateMedia">Migrate images to IndexedDB</button>
+        </div>
+        <p class="hint">Older overlays saved before this button existed live as data: URLs inside the ~5MB localStorage cap. New ones already go straight to IndexedDB.</p>
         <div id="topoList"></div>
         <div id="topoCtl" style="display:none">
           <div class="row" style="margin-top:10px">
@@ -581,8 +585,48 @@ function load() {
     }
     if (added) setTimeout(() => toast(`Added ${added} newly researched sector(s)`), 400);
     for (const t of S.topos) uid = Math.max(uid, (+String(t.id).replace(/\D/g, "") || 0) + 1);
+    for (const t of S.topos) if (t.src && t.src.startsWith("media:"))
+      mediaUid = Math.max(mediaUid, (+t.src.slice(7).replace(/\D/g, "") || 0) + 1);
   } catch (e) { /* corrupt state must never brick the map */ }
 }
+
+/* ----------------------------------------------------------------- media */
+/* Overlay images used to go into localStorage as data: URLs and hit the ~5MB
+   cap fast (README's own admission). This is a SEPARATE database from
+   petrohrad-tiles, not a v2 upgrade of it: tiledb() has no onblocked handler,
+   so bumping tiledb's version while a second tab is open would stall the
+   upgrade forever and take offline tiles down with it too. An independent
+   database sidesteps that failure mode entirely. */
+const MEDIA_DB = "petrohrad-media", MEDIA_ST = "media";
+let mediaDbPromise = null;
+function mediadb() {
+  if (!mediaDbPromise) mediaDbPromise = new Promise((res, rej) => {
+    if (!self.indexedDB) return rej(new Error("no indexedDB"));
+    const r = indexedDB.open(MEDIA_DB, 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains(MEDIA_ST)) d.createObjectStore(MEDIA_ST, { keyPath: "k" });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }).catch(e => { mediaDbPromise = null; throw e; });
+  return mediaDbPromise;
+}
+function mtx(mode, fn) {
+  return mediadb().then(d => new Promise((res, rej) => {
+    const t = d.transaction(MEDIA_ST, mode), st = t.objectStore(MEDIA_ST);
+    let out;
+    try { out = fn(st); } catch (e) { return rej(e); }
+    t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+    t.onerror = t.onabort = () => rej(t.error);
+  }));
+}
+let mediaUid = 1;
+const putMedia = (key, blob, name) => mtx("readwrite", st =>
+  st.put({ k: key, b: blob, t: blob.type, n: name, s: blob.size, at: Date.now() }));
+const getMedia = k => mtx("readonly", st => st.get(k));
+const delMedia = k => mtx("readwrite", st => st.delete(k));
+const clearMedia = () => mtx("readwrite", st => st.clear());
 
 /* ---------------------------------------------------------------- tiles */
 /* ==================================================================== offline
@@ -724,6 +768,20 @@ function matrix3d(h) {
 }
 
 const topoImgs = new Map();
+/* t.src is either a legacy data:/http string (sync) or "media:mN" pointing into
+   IndexedDB (async — needs an object URL minted per resolve). Both paths funnel
+   through here so renderTopos() never has to know which one it got. */
+function topoSrc(t, cb) {
+  if (t.src.startsWith("media:")) {
+    getMedia(t.src.slice(6)).then(rec => cb(rec && rec.b ? URL.createObjectURL(rec.b) : null))
+      .catch(() => cb(null));
+  } else cb(t.src);
+}
+function removeTopoImg(id) {
+  const img = topoImgs.get(id); if (!img) return;
+  if (img._blobUrl) URL.revokeObjectURL(img._blobUrl);
+  img.remove(); topoImgs.delete(id);
+}
 function renderTopos() {
   const seen = new Set();
   for (const t of S.topos) {
@@ -733,9 +791,14 @@ function renderTopos() {
       img = new Image();
       img.onload = () => renderTopos();
       img.onerror = () => toast("Overlay image could not be loaded");
-      img.src = t.src;
       topoImgs.set(t.id, img);
       elOv.appendChild(img);
+      topoSrc(t, url => {
+        if (topoImgs.get(t.id) !== img) return;   // deleted or replaced while the lookup was in flight
+        if (!url) { img.onerror(); return; }
+        if (url.startsWith("blob:")) img._blobUrl = url;
+        img.src = url;
+      });
     }
     if (!img.naturalWidth) continue;
     const w = img.naturalWidth, hh = img.naturalHeight;
@@ -747,8 +810,8 @@ function renderTopos() {
     img.style.transform = H ? matrix3d(H) : "";
     img.style.visibility = H ? "visible" : "hidden";
   }
-  for (const [id, img] of topoImgs) {
-    if (!seen.has(id)) { img.remove(); topoImgs.delete(id); }
+  for (const [id] of topoImgs) {
+    if (!seen.has(id)) removeTopoImg(id);
   }
 }
 function renderHandles() {
@@ -1121,7 +1184,9 @@ function setMode(m) {
 }
 
 /* ------------------------------------------------------- topo overlays */
-function addTopo(src, name) {
+function addTopo(srcOrBlob, name) {
+  const isBlob = srcOrBlob instanceof Blob;
+  const previewUrl = isBlob ? URL.createObjectURL(srcOrBlob) : null;
   const img = new Image();
   img.onload = () => {
     // drop it centred on the view, covering ~60% of the shorter side
@@ -1131,21 +1196,27 @@ function addTopo(src, name) {
     const cx = VW / 2, cy = VH / 2;
     const corners = [[-1,-1],[1,-1],[1,1],[-1,1]]
       .map(([sx, sy]) => toLatLng(cx + sx * w / 2, cy + sy * h / 2));
-    const t = { id: "t" + uid++, name: name || "topo " + (S.topos.length + 1),
-                src, corners, opacity: 65, visible: true, locked: false };
-    S.topos.push(t);
-    activeTopo = t.id;
-    save(); draw();
-    toast("Drag the 4 orange corners onto matching features");
+    const finish = finalSrc => {
+      const t = { id: "t" + uid++, name: name || "topo " + (S.topos.length + 1),
+                  src: finalSrc, corners, opacity: 65, visible: true, locked: false };
+      S.topos.push(t);
+      activeTopo = t.id;
+      save(); draw();
+      toast("Drag the 4 orange corners onto matching features");
+    };
+    if (isBlob) {
+      URL.revokeObjectURL(previewUrl);   // renderTopos() mints its own object URL via topoSrc()
+      const key = "m" + mediaUid++;
+      putMedia(key, srcOrBlob, name).then(() => finish("media:" + key))
+        .catch(() => toast("Could not store image — storage full?"));
+    } else finish(srcOrBlob);
   };
-  img.onerror = () => toast("That image could not be read");
-  img.src = src;
+  img.onerror = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); toast("That image could not be read"); };
+  img.src = isBlob ? previewUrl : srcOrBlob;
 }
 function fileToTopo(f) {
   if (!f || !f.type.startsWith("image/")) return;
-  const fr = new FileReader();
-  fr.onload = () => addTopo(fr.result, f.name.replace(/\.[^.]+$/, ""));
-  fr.readAsDataURL(f);
+  addTopo(f, f.name.replace(/\.[^.]+$/, ""));   // Blob goes straight to IndexedDB, never through localStorage
 }
 $("#drop").onclick = () => $("#file").click();
 $("#file").onchange = e => { [...e.target.files].forEach(fileToTopo); e.target.value = ""; };
@@ -1192,9 +1263,32 @@ $("#resetCorners").onclick = () => {
 $("#delTopo").onclick = () => {
   const t = S.topos.find(t => t.id === activeTopo); if (!t) return;
   if (!confirm(`Delete overlay “${t.name}”?`)) return;
+  removeTopoImg(t.id);
+  if (t.src.startsWith("media:")) delMedia(t.src.slice(6)).catch(() => {});
   S.topos = S.topos.filter(x => x.id !== t.id);
   activeTopo = S.topos.length ? S.topos[S.topos.length - 1].id : null;
   save(); draw();
+};
+$("#migrateMedia").onclick = async () => {
+  const legacy = S.topos.filter(t => t.src.startsWith("data:"));
+  if (!legacy.length) { toast("No overlays stored as data URLs"); return; }
+  const before = (localStorage.getItem(STORE) || "").length;
+  let moved = 0;
+  for (const t of legacy) {
+    try {
+      const blob = await (await fetch(t.src)).blob();
+      const key = "m" + mediaUid++;
+      await putMedia(key, blob, t.name);
+      t.src = "media:" + key;
+      moved++;
+    } catch (e) { /* leave this one as a data: URL rather than lose it */ }
+  }
+  if (moved) {
+    for (const [id] of topoImgs) removeTopoImg(id);
+    save(); draw();
+  }
+  const after = (localStorage.getItem(STORE) || "").length;
+  toast(`Moved ${moved}/${legacy.length} image(s) to IndexedDB — localStorage ${before}→${after} bytes`);
 };
 
 /* ------------------------------------------------------------- overpass */
@@ -1703,18 +1797,39 @@ $("#openMapy").onclick = () => window.open(
   `https://mapy.cz/turisticka?x=${S.center.lng.toFixed(5)}&y=${S.center.lat.toFixed(5)}&z=${Math.round(S.zoom)}`, "_blank");
 $("#openOsm").onclick = () => window.open(
   `https://www.openstreetmap.org/#map=${Math.round(S.zoom)}/${S.center.lat.toFixed(5)}/${S.center.lng.toFixed(5)}`, "_blank");
-$("#saveProj").onclick = () => download("petrohrad-project.json", JSON.stringify(S), "application/json");
+/* Media-backed overlays ("media:mN") live in IndexedDB, which a project export
+   can't reach into on someone else's machine — so a save inlines them back to
+   data: URLs under a v:2 envelope. Loading accepts both that envelope and the
+   bare-S shape every export used before (research/petrohrad-sectors-import.json
+   is that bare shape and must keep working). */
+$("#saveProj").onclick = async () => {
+  const topos = await Promise.all(S.topos.map(async t => {
+    if (!t.src.startsWith("media:")) return t;
+    try {
+      const rec = await getMedia(t.src.slice(6));
+      if (!rec || !rec.b) return t;   // orphaned pointer: ship it as-is rather than fail the export
+      const dataUrl = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(rec.b);
+      });
+      return { ...t, src: dataUrl };
+    } catch (e) { return t; }
+  }));
+  download("petrohrad-project.json", JSON.stringify({ v: 2, S: { ...S, topos } }), "application/json");
+};
 $("#loadProj").onclick = () => $("#projFile").click();
 $("#projFile").onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   const fr = new FileReader();
   fr.onload = () => {
     try {
-      const o = JSON.parse(fr.result);
+      const raw = JSON.parse(fr.result);
+      const o = raw && raw.v === 2 ? raw.S : raw;
       S = Object.assign(S, o);
       normaliseState();   // project files written before a field existed lack it
-      for (const [, img] of topoImgs) img.remove();
-      topoImgs.clear();
+      for (const [id] of topoImgs) removeTopoImg(id);
       activeTopo = S.topos[0]?.id || null;
       save(); draw(); toast("Project loaded");
     } catch (err) { toast("That file is not a valid project"); }
@@ -1723,13 +1838,14 @@ $("#projFile").onchange = e => {
   e.target.value = "";
 };
 $("#wipe").onclick = () => {
-  if (!confirm("Delete all overlays, pins and sector positions?")) return;
+  if (!confirm("Delete all overlays, pins, sector positions and locally stored images?")) return;
   localStorage.removeItem(STORE);
   S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
         pins: [], topos: [], sectors: {}, seeded: [] };
   normaliseState();
-  for (const [, img] of topoImgs) img.remove();
-  topoImgs.clear(); activeTopo = null; osmFeats = []; draw();
+  for (const [id] of topoImgs) removeTopoImg(id);
+  activeTopo = null; osmFeats = []; draw();
+  clearMedia().catch(() => {});
 };
 
 /* ----------------------------------------------------------------- misc */
