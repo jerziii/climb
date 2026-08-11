@@ -91,6 +91,9 @@
   details[open] summary::after{content:"–"}
   details[open] summary{color:var(--ink)}
   .sec{padding:2px 14px 14px}
+  .pgroup>.glabel{padding:10px 14px 3px;font-size:10.5px;letter-spacing:.4px;
+    text-transform:uppercase;color:var(--accent2);opacity:.85}
+  details.flash{outline:2px solid var(--accent);outline-offset:-1px}
 
   button,select,input[type=text],input[type=search]{
     font:inherit;color:var(--ink);background:#232733;border:1px solid var(--line);
@@ -249,6 +252,9 @@
   </div>
   <div class="pbody">
 
+    <div class="pgroup">
+      <div class="glabel">V poli / na výletě</div>
+
     <details open data-mode="home">
       <summary>Trip planning</summary>
       <div class="sec">
@@ -264,7 +270,10 @@
         <div class="row" style="margin-top:10px">
           <button class="pri" id="prepTrip">Připravit na cestu</button>
         </div>
-        <p class="hint">Cíle se přidávají tlačítkem <b>+</b> u jednotlivých cest v <b>Sector index</b> (dole).</p>
+        <div class="row" style="margin-top:8px">
+          <button class="sm" id="jumpToSectorIndex">+ Přidat cíl (Sector index)</button>
+        </div>
+        <p class="hint">Otevře <b>Sector index</b> a rozbalí seznam cest u sektorů tohoto výletu — cíle se přidávají tlačítkem <b>+</b> u konkrétní cesty.</p>
       </div>
     </details>
 
@@ -276,7 +285,76 @@
       </div>
     </details>
 
+    <details open data-mode="home">
+      <summary>How to use</summary>
+      <div class="sec">
+        <ol class="steps">
+          <li>Pick <b>Satellite</b> below and zoom to the sector you care about.</li>
+          <li>Screenshot a drawn sector map (guidebook page, planetmountain, ČHS) and press <b>Ctrl/Cmd+V</b> here — or drag the image file onto the map.</li>
+          <li>Drag the <b>4 orange corners</b> onto features you can identify on both images: road bends, forest edges, field corners, the chateau, the pond.</li>
+          <li>Pull the <b>opacity</b> slider until you can see both. Now the drawn blobs sit on real terrain.</li>
+          <li>Drop <b>pins</b> on the boulders you want, then <b>Export GPX</b> and open it in Mapy.cz / Locus / OsmAnd on your phone.</li>
+        </ol>
+        <p class="hint">Everything is stored in your browser (localStorage for state, IndexedDB for overlay images and offline tiles). No server, no account — works offline once loaded, except map tiles and OCR scanning.</p>
+      </div>
+    </details>
+
     <details data-mode="home">
+      <summary>Scan guidebook page (OCR)</summary>
+      <div class="sec">
+        <input type="file" id="ocrFileCam" accept="image/*" capture="environment" hidden>
+        <input type="file" id="ocrFileLib" accept="image/*" multiple hidden>
+        <div class="row">
+          <button class="sm" id="ocrCapture">📷 Vyfotit stránku</button>
+          <button class="sm" id="ocrPick">Vybrat obrázek</button>
+        </div>
+        <div id="ocrPreviewWrap" style="display:none;margin-top:8px">
+          <canvas id="ocrPreviewCanvas" style="max-width:100%;border-radius:6px;display:block"></canvas>
+          <div class="row" style="margin-top:6px">
+            <button class="sm" id="ocrRotate">⟳ Otočit 90°</button>
+            <input type="text" id="ocrHint" placeholder="Nápověda (nepovinné), např. „Mučírna, str. 25“" style="flex:1;min-width:120px">
+            <button class="pri sm" id="ocrSend">Rozpoznat text</button>
+          </div>
+        </div>
+        <div id="ocrReview"></div>
+        <p class="hint">Vyžaduje nasazení na Vercel s nastaveným OCR klíčem — z <code>file://</code> nebo <code>serve.py</code> bez <code>/api</code> tlačítko oznámí, že OCR není dostupné.</p>
+      </div>
+    </details>
+
+    <details data-mode="home">
+      <summary>Pins &amp; export</summary>
+      <div class="sec">
+        <div class="row">
+          <button id="addPin">Add pin</button>
+          <button class="sm" id="ruler">Ruler</button>
+        </div>
+        <div id="pinList"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="pri" id="expGpx">Export GPX</button>
+          <button class="sm" id="expGeo">GeoJSON</button>
+        </div>
+        <label class="opt"><input type="checkbox" id="gpxOsm"> Include OSM features in export</label>
+        <div class="row" style="margin-top:10px">
+          <span style="color:var(--dim);font-size:11.5px">Open this view in</span>
+          <button class="sm" id="openMapy">Mapy.cz</button>
+          <button class="sm" id="openOsm">OSM</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="sm" id="saveProj">Save project</button>
+          <button class="sm" id="loadProj">Load project</button>
+          <button class="sm" id="wipe">Reset all</button>
+        </div>
+        <input type="file" id="projFile" accept=".json,application/json" hidden>
+        <p class="hint">The project file contains your overlays (images included), their alignment, and all pins — that is what you back up or share with the others.</p>
+      </div>
+    </details>
+
+    </div>
+
+    <div class="pgroup">
+      <div class="glabel">Nastavení mapy — jednou</div>
+
+    <details data-mode="home" id="sectorIndexDetails">
       <summary>Sector index</summary>
       <div class="sec">
         <input type="search" id="sectorSearch" placeholder="Filter sectors…">
@@ -303,21 +381,7 @@
       </div>
     </details>
 
-    <details open data-mode="home">
-      <summary>How to use</summary>
-      <div class="sec">
-        <ol class="steps">
-          <li>Pick <b>Satellite</b> below and zoom to the sector you care about.</li>
-          <li>Screenshot a drawn sector map (guidebook page, planetmountain, ČHS) and press <b>Ctrl/Cmd+V</b> here — or drag the image file onto the map.</li>
-          <li>Drag the <b>4 orange corners</b> onto features you can identify on both images: road bends, forest edges, field corners, the chateau, the pond.</li>
-          <li>Pull the <b>opacity</b> slider until you can see both. Now the drawn blobs sit on real terrain.</li>
-          <li>Drop <b>pins</b> on the boulders you want, then <b>Export GPX</b> and open it in Mapy.cz / Locus / OsmAnd on your phone.</li>
-        </ol>
-        <p class="hint">Everything is stored in your browser (localStorage for state, IndexedDB for overlay images and offline tiles). No server, no account — works offline once loaded, except map tiles and OCR scanning.</p>
-      </div>
-    </details>
-
-    <details open data-mode="both">
+    <details data-mode="both">
       <summary>Base map</summary>
       <div class="sec" id="layerList"></div>
       <div class="sec" style="padding-top:0">
@@ -325,7 +389,7 @@
       </div>
     </details>
 
-    <details open data-mode="home">
+    <details data-mode="home">
       <summary>Topo overlays</summary>
       <div class="sec">
         <div class="drop" id="drop">
@@ -349,28 +413,6 @@
           </div>
           <p class="hint">Corner handles are hidden while locked, so you can pan without nudging the alignment.</p>
         </div>
-      </div>
-    </details>
-
-    <details data-mode="home">
-      <summary>Scan guidebook page (OCR)</summary>
-      <div class="sec">
-        <input type="file" id="ocrFileCam" accept="image/*" capture="environment" hidden>
-        <input type="file" id="ocrFileLib" accept="image/*" multiple hidden>
-        <div class="row">
-          <button class="sm" id="ocrCapture">📷 Vyfotit stránku</button>
-          <button class="sm" id="ocrPick">Vybrat obrázek</button>
-        </div>
-        <div id="ocrPreviewWrap" style="display:none;margin-top:8px">
-          <canvas id="ocrPreviewCanvas" style="max-width:100%;border-radius:6px;display:block"></canvas>
-          <div class="row" style="margin-top:6px">
-            <button class="sm" id="ocrRotate">⟳ Otočit 90°</button>
-            <input type="text" id="ocrHint" placeholder="Nápověda (nepovinné), např. „Mučírna, str. 25“" style="flex:1;min-width:120px">
-            <button class="pri sm" id="ocrSend">Rozpoznat text</button>
-          </div>
-        </div>
-        <div id="ocrReview"></div>
-        <p class="hint">Vyžaduje nasazení na Vercel s nastaveným OCR klíčem — z <code>file://</code> nebo <code>serve.py</code> bez <code>/api</code> tlačítko oznámí, že OCR není dostupné.</p>
       </div>
     </details>
 
@@ -421,33 +463,7 @@
       </div>
     </details>
 
-    <details data-mode="home">
-      <summary>Pins &amp; export</summary>
-      <div class="sec">
-        <div class="row">
-          <button id="addPin">Add pin</button>
-          <button class="sm" id="ruler">Ruler</button>
-        </div>
-        <div id="pinList"></div>
-        <div class="row" style="margin-top:10px">
-          <button class="pri" id="expGpx">Export GPX</button>
-          <button class="sm" id="expGeo">GeoJSON</button>
-        </div>
-        <label class="opt"><input type="checkbox" id="gpxOsm"> Include OSM features in export</label>
-        <div class="row" style="margin-top:10px">
-          <span style="color:var(--dim);font-size:11.5px">Open this view in</span>
-          <button class="sm" id="openMapy">Mapy.cz</button>
-          <button class="sm" id="openOsm">OSM</button>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <button class="sm" id="saveProj">Save project</button>
-          <button class="sm" id="loadProj">Load project</button>
-          <button class="sm" id="wipe">Reset all</button>
-        </div>
-        <input type="file" id="projFile" accept=".json,application/json" hidden>
-        <p class="hint">The project file contains your overlays (images included), their alignment, and all pins — that is what you back up or share with the others.</p>
-      </div>
-    </details>
+    </div>
 
   </div>
 </aside>
@@ -1855,6 +1871,16 @@ $("#delTrip").onclick = () => {
   S.trips = S.trips.filter(t => t.id !== trip.id);
   S.trip = S.trips[0]?.id || null;
   save(); drawTrip();
+};
+$("#jumpToSectorIndex").onclick = () => {
+  const trip = S.trips.find(t => t.id === S.trip);
+  const det = $("#sectorIndexDetails");
+  det.open = true;
+  if (trip) trip.sectors.forEach(s => openRoutes.add(s));
+  drawLists();
+  det.scrollIntoView({ behavior: "smooth", block: "start" });
+  det.classList.add("flash");
+  setTimeout(() => det.classList.remove("flash"), 1200);
 };
 $("#tripApproach").onchange = e => {
   const trip = S.trips.find(t => t.id === S.trip); if (!trip) return;
