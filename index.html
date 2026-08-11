@@ -174,6 +174,10 @@
   .routebox .norts{color:var(--dim);font-size:11px;font-style:italic}
   .routebox .b > .h{color:var(--dim);font-weight:400;font-size:10px;margin-left:5px}
   .routebox .src{color:var(--dim);font-size:10.5px;margin-top:2px;padding-top:6px;border-top:1px solid var(--line)}
+  .photos{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+  .photoWrap{position:relative;width:56px;height:56px}
+  .photoThumb{width:56px;height:56px;object-fit:cover;border-radius:5px;border:1px solid var(--line);cursor:pointer;background:#11141b}
+  .photoDel{position:absolute;top:-6px;right:-6px;padding:0 4px;line-height:1.4;font-size:10px}
 
   /* One route, two densities. `inline` is the sector index — hundreds of
      routes must fit a 260px scroller — plain `.item` is a tappable row.
@@ -402,6 +406,7 @@
           Drop an image here, click to pick a file,<br>or paste a screenshot with Ctrl/Cmd+V
         </div>
         <input type="file" id="file" accept="image/*" multiple hidden>
+        <input type="file" id="photoFile" accept="image/*" multiple hidden>
         <div class="row" style="margin-top:8px">
           <button class="sm" id="migrateMedia">Migrate images to IndexedDB</button>
         </div>
@@ -668,6 +673,7 @@ function normaliseState() {
   if (typeof S.trip !== "string" || !S.trips.some(t => t.id === S.trip))
     S.trip = S.trips[0]?.id || null;
   if (!S.book || typeof S.book !== "object") S.book = {};
+  for (const bk of Object.values(S.book)) if (!Array.isArray(bk.photos)) bk.photos = [];
 }
 
 function load() {
@@ -1344,6 +1350,43 @@ function fileToTopo(f) {
 }
 $("#drop").onclick = () => $("#file").click();
 $("#file").onchange = e => { [...e.target.files].forEach(fileToTopo); e.target.value = ""; };
+
+/* Boulder photos (the topo-with-colored-lines kind, not the sector-map kind
+   "Scan mapu" warps onto satellite) — same "media:mN" addressing as topo
+   overlays, just attached to a S.book[key].photos array instead of S.topos. */
+let photoAddTarget = null;   // S.book key set by a boulder's "+ foto", consumed by the next file pick
+function attachPhotoFiles(key, files) {
+  const bk = S.book[key];
+  if (!bk) return;
+  const imgs = [...files].filter(f => f.type.startsWith("image/"));
+  if (!imgs.length) return;
+  Promise.all(imgs.map(f => {
+    const mkey = "m" + mediaUid++;
+    return putMedia(mkey, f, f.name).then(() => "media:" + mkey);
+  })).then(srcs => {
+    if (!Array.isArray(bk.photos)) bk.photos = [];
+    bk.photos.push(...srcs);
+    save(); drawLists();
+    toast(`Přidáno ${srcs.length} foto${srcs.length > 1 ? "a" : ""} skály`);
+  }).catch(() => toast("Nepodařilo se uložit foto — úložiště plné?"));
+}
+$("#photoFile").onchange = e => {
+  if (photoAddTarget) attachPhotoFiles(photoAddTarget, e.target.files);
+  photoAddTarget = null; e.target.value = "";
+};
+const photoBlobCache = new Map();   // "media:mN" -> object URL, so a redraw never re-fetches from IndexedDB
+function bindPhotoThumb(img) {
+  const src = img.dataset.src;
+  if (!src.startsWith("media:")) { img.src = src; }
+  else if (photoBlobCache.has(src)) { img.src = photoBlobCache.get(src); }
+  else getMedia(src.slice(6)).then(rec => {
+    if (!rec || !rec.b) return;
+    const url = URL.createObjectURL(rec.b);
+    photoBlobCache.set(src, url);
+    if (img.isConnected) img.src = url;
+  }).catch(() => {});
+  img.onclick = () => img.src && window.open(img.src, "_blank");
+}
 ["dragenter","dragover"].forEach(t => document.addEventListener(t, e => {
   e.preventDefault(); $("#drop").classList.add("hot");
 }));
@@ -1660,9 +1703,16 @@ function renderBoulderBlock(n, b, bk) {
     : (bk && bk.code ? `<span class="h">${esc(bk.code)}${bk.page ? ", s. " + bk.page : ""}</span>` : "");
   const gpsBtn = bk && bk.gps
     ? ` <button class="sm placeBookGps" data-lat="${bk.gps.lat}" data-lng="${bk.gps.lng}" title="Umístit na mapu">GPS ↦</button>` : "";
+  const photoBtn = bk
+    ? ` <button class="sm addPhoto" data-key="${esc(bk.key)}" title="Přidat foto skály s vyznačenými cestami">+ foto</button>` : "";
+  const photos = bk && bk.photos && bk.photos.length
+    ? `<div class="photos">${bk.photos.map((src, pi) => `
+        <span class="photoWrap"><img class="photoThumb" data-src="${esc(src)}" alt="foto skály">
+        <button class="sm photoDel" data-key="${esc(bk.key)}" data-pi="${pi}" title="Smazat foto">✕</button></span>`).join("")}</div>`
+    : "";
   let rs;
   if (bk) {
-    rs = renderBookRoutes(bk, b, n) + gpsBtn;
+    rs = renderBookRoutes(bk, b, n) + gpsBtn + photoBtn + photos;
   } else if (b.r.length) {
     // An entry with no routes is not an empty boulder — it is one whose route
     // list was never sourced. Say which, and list the rock names if we have them.
@@ -1800,6 +1850,17 @@ function drawLists() {
     S.center = { lat, lng }; S.zoom = Math.max(S.zoom, 18); save(); draw();
     toast("Souřadnice z knihy nastaveny na mapě");
   });
+  $("#sectorList").querySelectorAll(".addPhoto").forEach(b => b.onclick = () => {
+    photoAddTarget = b.dataset.key;
+    $("#photoFile").click();
+  });
+  $("#sectorList").querySelectorAll(".photoDel").forEach(b => b.onclick = () => {
+    const bk = S.book[b.dataset.key];
+    if (!bk || !bk.photos) return;
+    bk.photos.splice(+b.dataset.pi, 1);
+    save(); drawLists();
+  });
+  $("#sectorList").querySelectorAll(".photoThumb").forEach(img => bindPhotoThumb(img));
   $("#sectorList").querySelectorAll("[data-routes]").forEach(b => b.onclick = () => {
     const n = b.dataset.routes;
     if (openRoutes.has(n)) openRoutes.delete(n); else openRoutes.add(n);
@@ -2257,12 +2318,17 @@ function renderOcrReview() {
         </div>
         <div id="ocrRows-${bi}"></div>
         <button class="sm ocrAddRow" data-bi="${bi}" style="margin-top:6px">+ řádek</button>
+        <div class="row" style="margin-top:6px">
+          <button type="button" class="sm ocrPhotoBtn" data-bi="${bi}" title="Foto skály s vyznačenými cestami">+ foto skály</button>
+          <input type="file" class="ocrPhotoAdd" data-bi="${bi}" accept="image/*" multiple hidden>
+        </div>
+        <div class="photos" id="ocrPhotos-${bi}"></div>
       </div>`).join("")}
     <div class="row" style="margin-top:10px">
       <button class="pri" id="ocrSave" disabled>Uložit do knihovny</button>
     </div>
     <p class="hint">${unsureTotal ? `<b style="color:var(--bad)">${unsureTotal}</b> nejistých řádků zvýrazněno níže.` : "Žádné nejisté řádky."}</p>`;
-  ocrResult.boulders.forEach((b, bi) => renderOcrRows(bi));
+  ocrResult.boulders.forEach((b, bi) => { renderOcrRows(bi); renderOcrPhotos(bi); });
   el.querySelectorAll(".ocrGps").forEach(inp => inp.onchange = () => { ocrResult.boulders[+inp.dataset.bi].gps = inp.value; });
   el.querySelectorAll(".ocrPlaceGps").forEach(btn => btn.onclick = () => {
     const bi = +btn.dataset.bi, b = ocrResult.boulders[bi];
@@ -2276,6 +2342,16 @@ function renderOcrReview() {
     const bi = +btn.dataset.bi;
     ocrResult.boulders[bi].routes.push({ letter: "", name: "", grade: "", style: "", note: "", unsure: false, included: true });
     renderOcrRows(bi);
+  });
+  el.querySelectorAll(".ocrPhotoBtn").forEach(btn => btn.onclick = () => {
+    el.querySelector(`.ocrPhotoAdd[data-bi="${btn.dataset.bi}"]`).click();
+  });
+  el.querySelectorAll(".ocrPhotoAdd").forEach(inp => inp.onchange = () => {
+    const bi = +inp.dataset.bi, b = ocrResult.boulders[bi];
+    if (!Array.isArray(b._photoFiles)) b._photoFiles = [];
+    b._photoFiles.push(...[...inp.files].filter(f => f.type.startsWith("image/")));
+    inp.value = "";
+    renderOcrPhotos(bi);
   });
   $("#ocrSource").oninput = () => { $("#ocrSave").disabled = !$("#ocrSource").value.trim(); };
   $("#ocrSave").onclick = () => saveOcrToBook($("#ocrSource").value.trim());
@@ -2300,17 +2376,37 @@ function renderOcrRows(bi) {
     row.querySelector(".ocrDelRow").onclick = () => { b.routes.splice(ri, 1); renderOcrRows(bi); };
   });
 }
+/* Pending photos live as plain Files on ocrResult (b._photoFiles) until Save —
+   same staging discipline as every other OCR field — so previews are cheap
+   object URLs and nothing touches IndexedDB for a scan that gets discarded. */
+function renderOcrPhotos(bi) {
+  const b = ocrResult.boulders[bi];
+  const el = $("#ocrPhotos-" + bi);
+  const files = b._photoFiles || [];
+  el.innerHTML = files.map((f, fi) => `
+    <span class="photoWrap"><img class="photoThumb" src="${URL.createObjectURL(f)}" alt="foto skály">
+    <button type="button" class="sm photoDel" data-bi="${bi}" data-fi="${fi}" title="Odebrat">✕</button></span>`).join("");
+  el.querySelectorAll(".photoDel").forEach(btn => btn.onclick = () => {
+    const i = +btn.dataset.bi;
+    ocrResult.boulders[i]._photoFiles.splice(+btn.dataset.fi, 1);
+    renderOcrPhotos(i);
+  });
+}
 /* Book entries mirror the ROUTES shape closely enough for routesPanel() to
    merge them, keyed "sector|boulder name" — a boulder with no sector typed in
    is skipped and named in the toast rather than guessed at and silently
-   mis-filed under the wrong rock. */
-function saveOcrToBook(source) {
+   mis-filed under the wrong rock. Photos go through IndexedDB (mediaUid, same
+   "media:mN" addressing as topo overlays) only now, on save — and merge with
+   whatever a previous scan of the same boulder already attached, so
+   re-scanning the route table never drops a rock photo you already have. */
+async function saveOcrToBook(source) {
   if (!source) return;
   const el = $("#ocrReview");
   let saved = 0, skipped = [];
-  ocrResult.boulders.forEach((b, bi) => {
+  for (let bi = 0; bi < ocrResult.boulders.length; bi++) {
+    const b = ocrResult.boulders[bi];
     const sector = el.querySelector(`.ocrSector[data-bi="${bi}"]`).value.trim();
-    if (!sector) { skipped.push(b.name || "(bez názvu)"); return; }
+    if (!sector) { skipped.push(b.name || "(bez názvu)"); continue; }
     let lastLetter = "";
     const routes = b.routes.filter(r => r.included !== false && (r.letter || r.name)).map(r => {
       const row = { letter: r.letter, name: r.name, grade: r.grade, style: r.style, note: r.note, unsure: !!r.unsure };
@@ -2320,12 +2416,17 @@ function saveOcrToBook(source) {
     // A batch-merged boulder carries its own page list (it may span pages);
     // a single-page scan just has ocrResult.page.
     const page = (b._pages && b._pages.find(Boolean)) || ocrResult.page;
-    S.book[sector + "|" + b.name] = {
+    const key = sector + "|" + b.name;
+    const newPhotos = await Promise.all((b._photoFiles || []).map(f => {
+      const mkey = "m" + mediaUid++;
+      return putMedia(mkey, f, f.name).then(() => "media:" + mkey);
+    }));
+    S.book[key] = {
       code: b.code, page, src: source, at: new Date().toISOString().slice(0, 10),
-      gps: b._gpsLatLng || null, routes,
+      gps: b._gpsLatLng || null, routes, photos: [...(S.book[key]?.photos || []), ...newPhotos],
     };
     saved++;
-  });
+  }
   save(); drawLists();
   ocrResult = null; ocrPendingFile = null; $("#ocrPreviewWrap").style.display = "none"; renderOcrReview();
   toast(saved
@@ -2591,27 +2692,34 @@ $("#openMapy").onclick = () => window.open(
   `https://mapy.cz/turisticka?x=${S.center.lng.toFixed(5)}&y=${S.center.lat.toFixed(5)}&z=${Math.round(S.zoom)}`, "_blank");
 $("#openOsm").onclick = () => window.open(
   `https://www.openstreetmap.org/#map=${Math.round(S.zoom)}/${S.center.lat.toFixed(5)}/${S.center.lng.toFixed(5)}`, "_blank");
-/* Media-backed overlays ("media:mN") live in IndexedDB, which a project export
-   can't reach into on someone else's machine — so a save inlines them back to
-   data: URLs under a v:2 envelope. Loading accepts both that envelope and the
-   bare-S shape every export used before (research/petrohrad-sectors-import.json
-   is that bare shape and must keep working). */
+/* Media-backed overlays and boulder photos ("media:mN") live in IndexedDB,
+   which a project export can't reach into on someone else's machine — so a
+   save inlines them back to data: URLs under a v:2 envelope. Loading accepts
+   both that envelope and the bare-S shape every export used before
+   (research/petrohrad-sectors-import.json is that bare shape and must keep
+   working). An orphaned pointer ships as-is rather than failing the export. */
+async function inlineMediaSrc(src) {
+  if (!src.startsWith("media:")) return src;
+  try {
+    const rec = await getMedia(src.slice(6));
+    if (!rec || !rec.b) return src;
+    return await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = rej;
+      fr.readAsDataURL(rec.b);
+    });
+  } catch (e) { return src; }
+}
 $("#saveProj").onclick = async () => {
-  const topos = await Promise.all(S.topos.map(async t => {
-    if (!t.src.startsWith("media:")) return t;
-    try {
-      const rec = await getMedia(t.src.slice(6));
-      if (!rec || !rec.b) return t;   // orphaned pointer: ship it as-is rather than fail the export
-      const dataUrl = await new Promise((res, rej) => {
-        const fr = new FileReader();
-        fr.onload = () => res(fr.result);
-        fr.onerror = rej;
-        fr.readAsDataURL(rec.b);
-      });
-      return { ...t, src: dataUrl };
-    } catch (e) { return t; }
-  }));
-  download("petrohrad-project.json", JSON.stringify({ v: 2, S: { ...S, topos } }), "application/json");
+  const topos = await Promise.all(S.topos.map(async t => ({ ...t, src: await inlineMediaSrc(t.src) })));
+  const book = {};
+  for (const [k, v] of Object.entries(S.book)) {
+    book[k] = v.photos && v.photos.length
+      ? { ...v, photos: await Promise.all(v.photos.map(inlineMediaSrc)) }
+      : v;
+  }
+  download("petrohrad-project.json", JSON.stringify({ v: 2, S: { ...S, topos, book } }), "application/json");
 };
 $("#loadProj").onclick = () => $("#projFile").click();
 $("#projFile").onchange = e => {

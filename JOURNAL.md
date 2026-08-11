@@ -1,3 +1,36 @@
+## 2026-08-11 — foto skály u naskenovaného boulderu
+
+- **Co:** Rozebrány dvě fotky ze skutečné knihy (A0. Mordor — tabulka cest +
+  foto skály s barevnými čárami a písmeny, a A.a topo přístupu) na to, co
+  import pipeline umí a co ne. Tabulka cest a GPS řádek → beze změny kódu,
+  stávající OCR flow (`api/ocr.js`, `saveOcrToBook`) to zvládá včetně variant
+  bez písmene. Přístupová mapa → beze změny kódu, existující „Scan mapu“
+  (homografie na satelit) je přesně na tohle. Jediná mezera: foto skály s
+  vyznačenými cestami se nikam neukládalo. Doplněno: `S.book[key].photos`
+  (array `"media:mN"` — stejné adresování jako topo overlaye, `putMedia`/
+  `getMedia`/`mediaUid` beze změny). Dvě cesty k přidání: (1) v OCR review
+  tlačítko „+ foto skály“ u každého boulderu — staging jako plain `File[]`
+  na `ocrResult.boulders[bi]._photoFiles` až do Uložit (stejná disciplína
+  jako zbytek OCR review), teprve `saveOcrToBook` (teď `async`) je uloží do
+  IndexedDB a **slouží** s fotkami z předchozího skenu stejného boulderu,
+  aby reskenování tabulky nesmazalo dřív přidanou fotku; (2) přímo u už
+  uloženého boulderu v Sector indexu tlačítko „+ foto“ (`attachPhotoFiles`).
+  Náhledy (`.photoThumb`, klik = otevřít foto v nové kartě, `photoBlobCache`
+  proti opakovanému čtení z IndexedDB při každém překreslení) a mazání
+  (`.photoDel`) po jedné fotce. `$("#saveProj")` export byl duplicitní kód
+  pro inlining topo overlayů do `data:` URL — vytažen do `inlineMediaSrc()`
+  a použit i pro `S.book[*].photos`, jinak by fotka po exportu/reimportu na
+  jiném stroji zmizela (IndexedDB nejde exportovat).
+- **Stav:** Ověřeno v prohlížeči (serve.py): fake `S.book` záznam → „+ foto“
+  tlačítko, upload → náhled z IndexedDB, klik (blob: URL správně), smazání;
+  fake `ocrResult` → OCR review karta s „+ foto skály“, staging náhledu,
+  Uložit → `photos` obsahuje starou i novou fotku (`["media:m2","media:m3"]`);
+  `inlineMediaSrc()` na `media:m2` vrátil `data:image/png;base64,...`. Bez
+  chyb v konzoli. `node --check` na extrahovaném `<script>` prošel.
+- **Další:** Reálný OCR přes fotku strany 23/22 od majitele stále neověřen
+  (žádný provider klíč v tomto prostředí) — hotovo je jen import pipeline a
+  úložiště fotek, ne skutečné foto z knihy.
+
 ## 2026-08-11 — sjednocené vykreslování cesty/cíle (routeCard)
 
 - **Co:** Cesta se dřív vykreslovala 4 různě: Sector index (`.rt` span),
