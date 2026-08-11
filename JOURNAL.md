@@ -1,3 +1,38 @@
+## 2026-08-11 — trip planning + OCR skenování knihy
+
+- **Co:** Pět kroků najednou (samostatné commity): (1) obrázky topo overlayů
+  přesunuty z localStorage do vlastní IndexedDB databáze `petrohrad-media`,
+  s tlačítkem „Migrate images to IndexedDB“ pro staré data: URL overlaye a
+  v:2 obálkou v uloženém projektu, která je při exportu zase inlinuje;
+  (2) plánování výletů — `S.trips`/`S.trip`, přepínač **Doma**/**Na skále**
+  (jedno CSS pravidlo na `data-mode`, žádný router), tlačítko **+** u každé
+  cesty v Sector index přidá cíl, „Připravit na cestu“ stáhne offline mapy
+  pro sektory výletu a exportuje GPX; (3) nasazení na Vercel
+  (`climb-flame.vercel.app`) — `vercel.json`, `sw.js` teď netrackuje `/api/*`,
+  `.gitignore` doplněn o `.env*.local`; (4) `api/ocr.js` — OCR jedné stránky
+  (Gemini `gemini-3.6-flash` výchozí, Anthropic fallback, jedno interní
+  schema pro obě), klient fotí/vybírá obrázek, otočí, downscaluje a dostane
+  tabulku k opravě, uložení vyžaduje vyplněný Source; (5) fronta pro víc
+  stránek najednou (postup N/M, odhad cenu, chybná stránka nezastaví zbytek,
+  slučování boulderů podle (oblast, kód) přes stránky), sloučení naskenovaných
+  dat do `S.book` v routesPanel (nahrazuje ČHS řádek, značka „ČHS: X“ jen při
+  nesouladu, varianty odsazené), tlačítko „Scan mapu“ pro schematickou mapu
+  sektoru a GPS z knihy má přednost před souřadnicí sektoru v GPX exportu.
+- **Mimoto:** oprava skutečné chyby v `uid` — počítal se jen z `S.topos`,
+  takže po reloadu s piny/výlety a bez overlayů se další pin/cíl trefil do
+  už použitého id a smazání jednoho smazalo obě věci. Teď se skenují i piny,
+  výlety a cíle.
+- **Stav:** Všech pět kroků odzkoušeno v prohlížeči (media store round-trip,
+  mode toggle, fronta se simulovanou chybnou stránkou, `parseLatLng` na
+  přesném GPS řádku ze strany 25 vrací ~{50.1249, 13.4507}, ČHS marker se
+  objeví a zmizí podle shody), endpoint ověřen nasazený (`GET` vrací
+  `{ok,model,maxB64}`, `POST` bez klíče `401`). **Neověřeno:** skutečný OCR
+  přes reálné foto strany 25 — čeká se na fotku od majitele, žádný provider
+  klíč není v tomto prostředí nastaven.
+- **Další:** Fotka strany 25 → ověřit OCR výstup řádek po řádku proti
+  očekávání ze zadání. Volitelný krok 6 (fotky u boulderů, pinch-zoom) nebyl
+  implementován — čas šel do povinných kroků a dokumentace.
+
 ## 2026-08-08 — offline mapy (stáhnout oblast, např. Žihle)
 
 - **Co:** Nová sekce „Offline maps“. Vybereš oblast (kterýkoliv lokalizovaný

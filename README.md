@@ -80,7 +80,17 @@ sketches drawn at an angle or with a skewed aspect ratio can still be made to fi
   are reading the map. Tap again to come back to yourself. When the device has a
   compass, a cone on the dot shows the direction you are facing.
 - **Pins, ruler** (distance + rough walking time), **GPX / GeoJSON export**, and a
-  **project file** that round-trips everything including the overlay images.
+  **project file** that round-trips everything, including the overlay images (inlined
+  as data URLs on export, regardless of whether they live in IndexedDB or as legacy
+  data: URLs on your machine) and trip plans.
+- **Trip planning** — a **Doma** / **Na skále** toggle switches the whole panel between
+  planning (trips, goals, sector download, GPX) and a large-tap-target goal list for
+  the rock, where nothing needs typing.
+- **Scan a guidebook page (OCR)** — photograph or pick a page image, downscale happens
+  client-side, and a Vercel function (Gemini or Anthropic, your choice) transcribes
+  boulders and routes into a reviewable table you correct before saving. Requires a
+  deployment with an OCR key configured; from `file://` or `serve.py` the button says
+  so honestly instead of pretending to work.
 - **Open a sector in Mapy.cz** — every located sector has a **Mapy ↗** button in the
   index, and tapping its marker gives a popup with the same. The link drops you on
   that exact point rather than the general area, so the Mapy app offers *Navigate*
@@ -116,16 +126,26 @@ over ~2 km of forest around it. It points at the right woodland, not at a crag.
   Tile servers are donated infrastructure and their usage policies forbid bulk
   downloading, so grab the sector you are going to climb, once — not the whole region,
   repeatedly. Storing tiles for a personal trip is what the cap is sized for.
-- Overlay images are stored as data URLs in `localStorage`, which browsers cap at around
-  5 MB. Downscale big screenshots, or keep alignments in a saved project file instead.
+- Overlay images are stored as Blobs in a dedicated IndexedDB database
+  (`petrohrad-media`), not as data URLs in `localStorage` — that cap (~5MB) is what
+  pushed them out. Overlays saved before this existed still work as data: URLs; a
+  "Migrate images to IndexedDB" button moves them over on demand.
 - Ruler walking time assumes ~65 m/min, i.e. slow going on forest paths with a pad.
 
 ## Development
 
 `index.html` is the whole application — vanilla JS, no dependencies, works from `file://`.
-The one other file is `sw.js`, the service worker that caches the page for offline use;
-it needs a secure origin, so it registers over https (or localhost) and is skipped
-entirely on `file://`, where the page is local anyway.
+`sw.js` is the service worker that caches the page for offline use; it needs a secure
+origin, so it registers over https (or localhost) and is skipped entirely on `file://`,
+where the page is local anyway. It also never caches `/api/*`, so the OCR reachability
+probe can't replay a stale "reachable" answer.
+
+`api/ocr.js` is the one server-side piece — a Vercel function, deployed from
+`vercel.json`, that does the actual OCR call (Gemini by default, Anthropic as a
+fallback) behind a shared-secret header. It needs `GEMINI_API_KEY` or
+`ANTHROPIC_API_KEY`, `OCR_SHARED_SECRET`, and optionally `OCR_PROVIDER`/`OCR_MODEL`
+set as Vercel env vars. `package.json` exists only to install `@anthropic-ai/sdk` for
+that one function — it has no build step and doesn't change how `index.html` runs.
 The map is a small purpose-built slippy map (Web Mercator projection, tile grid, marker layer)
 plus a 4-point homography solved by Gaussian elimination and applied as a CSS `matrix3d`.
 
