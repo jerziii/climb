@@ -118,6 +118,9 @@
   .goalrow .letter{display:inline-block;min-width:20px;font-weight:700;color:var(--accent2)}
   .goalrow .grade{color:var(--accent);font-weight:600}
   .goalrow button.sm{padding:8px 12px;font-size:13px}
+  .ocrRow{padding:3px 2px}
+  .ocrRow.unsure{background:#3a2418;border-radius:4px}
+  .ocrRow input[type=text]{min-width:0}
   label.opt{display:flex;gap:7px;align-items:center;padding:4px 0;cursor:pointer}
   input[type=range]{width:100%;accent-color:var(--accent)}
   input[type=search]{width:100%}
@@ -346,6 +349,28 @@
           </div>
           <p class="hint">Corner handles are hidden while locked, so you can pan without nudging the alignment.</p>
         </div>
+      </div>
+    </details>
+
+    <details data-mode="home">
+      <summary>Scan guidebook page (OCR)</summary>
+      <div class="sec">
+        <input type="file" id="ocrFileCam" accept="image/*" capture="environment" hidden>
+        <input type="file" id="ocrFileLib" accept="image/*" hidden>
+        <div class="row">
+          <button class="sm" id="ocrCapture">📷 Vyfotit stránku</button>
+          <button class="sm" id="ocrPick">Vybrat obrázek</button>
+        </div>
+        <div id="ocrPreviewWrap" style="display:none;margin-top:8px">
+          <canvas id="ocrPreviewCanvas" style="max-width:100%;border-radius:6px;display:block"></canvas>
+          <div class="row" style="margin-top:6px">
+            <button class="sm" id="ocrRotate">⟳ Otočit 90°</button>
+            <input type="text" id="ocrHint" placeholder="Nápověda (nepovinné), např. „Mučírna, str. 25“" style="flex:1;min-width:120px">
+            <button class="pri sm" id="ocrSend">Rozpoznat text</button>
+          </div>
+        </div>
+        <div id="ocrReview"></div>
+        <p class="hint">Vyžaduje nasazení na Vercel s nastaveným OCR klíčem — z <code>file://</code> nebo <code>serve.py</code> bez <code>/api</code> tlačítko oznámí, že OCR není dostupné.</p>
       </div>
     </details>
 
@@ -612,6 +637,7 @@ function normaliseState() {
   }
   if (typeof S.trip !== "string" || !S.trips.some(t => t.id === S.trip))
     S.trip = S.trips[0]?.id || null;
+  if (!S.book || typeof S.book !== "object") S.book = {};
 }
 
 function load() {
@@ -1786,6 +1812,215 @@ async function prepareTrip() {
 }
 $("#prepTrip").onclick = prepareTrip;
 
+/* ----------------------------------------------------------------- OCR */
+/* The client's copy of the shared secret lives under its own localStorage
+   key, never inside S — S rides along in every project export/import, and a
+   key baked into a shared project file would leak to whoever opens it. */
+const OCR_KEY_STORE = "petrohrad-ocr-key";
+let ocrKey = localStorage.getItem(OCR_KEY_STORE) || "";
+let ocrProbeResult = null;   // null = not checked yet; probing happens lazily, never at startup — the map must not wait on /api
+let ocrPendingFile = null, ocrRotationDeg = 0, ocrResult = null;
+
+async function ocrProbe() {
+  if (ocrProbeResult !== null) return ocrProbeResult;
+  try {
+    const r = await fetch("/api/ocr");
+    ocrProbeResult = r.ok ? await r.json() : false;
+  } catch (e) { ocrProbeResult = false; }
+  return ocrProbeResult;
+}
+
+$("#ocrCapture").onclick = () => $("#ocrFileCam").click();
+$("#ocrPick").onclick = () => $("#ocrFileLib").click();
+[$("#ocrFileCam"), $("#ocrFileLib")].forEach(inp => inp.onchange = e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f || !f.type.startsWith("image/")) return;
+  ocrPendingFile = f; ocrRotationDeg = 0;
+  renderOcrPreview();
+});
+
+/* Rotation is applied to the full-resolution canvas here, before downscale —
+   EXIF is deliberately not trusted (many phone/scanner apps write it wrong for
+   this exact use case: a book page photographed sideways on a table). */
+async function renderOcrPreview() {
+  const bitmap = await createImageBitmap(ocrPendingFile, { imageOrientation: "from-image" });
+  const rot = ((ocrRotationDeg % 360) + 360) % 360;
+  const swap = rot === 90 || rot === 270;
+  const canvas = $("#ocrPreviewCanvas");
+  canvas.width = swap ? bitmap.height : bitmap.width;
+  canvas.height = swap ? bitmap.width : bitmap.height;
+  const ctx = canvas.getContext("2d");
+  ctx.save();
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate(rot * Math.PI / 180);
+  ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+  ctx.restore();
+  bitmap.close();
+  $("#ocrPreviewWrap").style.display = "";
+}
+$("#ocrRotate").onclick = () => { ocrRotationDeg += 90; renderOcrPreview(); };
+
+/* Quality-first, resolution-last: heavy JPEG compression destroys exactly the
+   8pt type this feature exists to read, so quality only drops after hitting
+   the target long edge, and resolution only drops if quality alone can't get
+   under the body-size cap. */
+async function downscaleCanvas(src) {
+  const TARGET = 2576;
+  const longEdge = Math.max(src.width, src.height);
+  let w = src.width, h = src.height;
+  if (longEdge > TARGET) { const s = TARGET / longEdge; w = Math.round(w * s); h = Math.round(h * s); }
+  let out = src;
+  if (w !== src.width) {
+    out = document.createElement("canvas"); out.width = w; out.height = h;
+    out.getContext("2d").drawImage(src, 0, 0, w, h);
+  }
+  for (const q of [0.90, 0.82, 0.75]) {
+    const blob = await new Promise(res => out.toBlob(res, "image/jpeg", q));
+    if (blob && blob.size < 4_500_000) return blob;
+  }
+  return new Promise(res => out.toBlob(res, "image/jpeg", 0.75));
+}
+
+async function ocrSend() {
+  if (!ocrPendingFile) return toast("Nejdřív vyfoť nebo vyber stránku");
+  const probe = await ocrProbe();
+  if (!probe || !probe.ok) return toast("OCR backend není dostupný — nasazeno bez /api, nebo je vypnuté (spuštěno z file:// / serve.py)");
+  if (!ocrKey) {
+    const k = prompt("Vlož OCR klíč (X-Climb-Key), ten samý jako OCR_SHARED_SECRET na serveru");
+    if (!k) return;
+    ocrKey = k; localStorage.setItem(OCR_KEY_STORE, k);
+  }
+  const blob = await downscaleCanvas($("#ocrPreviewCanvas"));
+  const b64 = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result.split(",")[1]);
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
+  });
+  const hint = $("#ocrHint").value.trim();
+  const btn = $("#ocrSend");
+  btn.disabled = true; btn.textContent = "Rozpoznávám…";
+  try {
+    const r = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Climb-Key": ocrKey },
+      body: JSON.stringify({ image: { mime: "image/jpeg", b64 }, hint: hint || undefined }),
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(`OCR selhalo: ${j.msg || j.code}`); return; }
+    ocrResult = j;
+    renderOcrReview();
+  } catch (e) { toast("OCR selhalo — zkontroluj připojení"); }
+  finally { btn.disabled = false; btn.textContent = "Rozpoznat text"; }
+}
+$("#ocrSend").onclick = ocrSend;
+
+function guessSector(area) {
+  if (!area) return "";
+  const stripped = area.replace(/^[A-Za-z0-9]+\.\s*/, "").trim();   // "A. Větrná hůrka" -> "Větrná hůrka"
+  const known = [...guidebookNames(), ...Object.keys(S.sectors)];
+  return known.find(n => norm(n) === norm(stripped))
+      || known.find(n => norm(stripped).includes(norm(n)) || norm(n).includes(norm(stripped)))
+      || stripped;
+}
+
+/* The review table is rendered ONLY from ocrSend()'s response and from these
+   explicit row/boulder edits — never from draw() — for the same reason
+   drawTrip() isn't: draw() runs on every pan/GPS/orientation frame and would
+   wipe out whatever field a half-typed edit was sitting in. Field edits read
+   straight back out of the DOM on change/blur instead of re-rendering. */
+function renderOcrReview() {
+  const el = $("#ocrReview");
+  if (!ocrResult) { el.innerHTML = ""; return; }
+  const unsureTotal = ocrResult.boulders.reduce((s, b) => s + b.routes.filter(r => r.unsure).length, 0);
+  el.innerHTML = `
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="ocrSource" placeholder="Zdroj (např. „Petrohrad a okolí, s. 25“) — vyžadováno pro uložení" style="flex:1;min-width:140px">
+    </div>
+    ${ocrResult.warnings && ocrResult.warnings.length ? `<p class="hint" style="color:var(--bad)">${ocrResult.warnings.map(esc).join("<br>")}</p>` : ""}
+    ${ocrResult.boulders.map((b, bi) => `
+      <div class="routebox" data-bi="${bi}">
+        <div class="row"><b>${esc(b.code || "?")} ${esc(b.name || "(bez názvu)")}</b></div>
+        <div class="row" style="margin-top:4px">
+          <input type="text" class="ocrSector" data-bi="${bi}" list="secNames" value="${esc(guessSector(ocrResult.area))}" placeholder="Sektor" style="flex:1;min-width:100px">
+          <input type="text" class="ocrGps" data-bi="${bi}" value="${esc(b.gps || "")}" placeholder="GPS řádek z knihy" style="flex:1;min-width:140px">
+          <button class="sm ocrPlaceGps" data-bi="${bi}">Umístit boulder sem</button>
+        </div>
+        <div id="ocrRows-${bi}"></div>
+        <button class="sm ocrAddRow" data-bi="${bi}" style="margin-top:6px">+ řádek</button>
+      </div>`).join("")}
+    <div class="row" style="margin-top:10px">
+      <button class="pri" id="ocrSave" disabled>Uložit do knihovny</button>
+    </div>
+    <p class="hint">${unsureTotal ? `<b style="color:var(--bad)">${unsureTotal}</b> nejistých řádků zvýrazněno níže.` : "Žádné nejisté řádky."}</p>`;
+  ocrResult.boulders.forEach((b, bi) => renderOcrRows(bi));
+  el.querySelectorAll(".ocrGps").forEach(inp => inp.onchange = () => { ocrResult.boulders[+inp.dataset.bi].gps = inp.value; });
+  el.querySelectorAll(".ocrPlaceGps").forEach(btn => btn.onclick = () => {
+    const bi = +btn.dataset.bi, b = ocrResult.boulders[bi];
+    const ll = parseLatLng(b.gps || "");
+    if (!ll) return toast("GPS řádek se nepodařilo rozpoznat — zkontroluj formát");
+    b._gpsLatLng = ll;
+    S.center = { lat: ll.lat, lng: ll.lng }; S.zoom = Math.max(S.zoom, 18); save(); draw();
+    toast(`Souřadnice „${b.name}“ nastaveny na mapě — umísti sektor v Sector index, pokud ještě není`);
+  });
+  el.querySelectorAll(".ocrAddRow").forEach(btn => btn.onclick = () => {
+    const bi = +btn.dataset.bi;
+    ocrResult.boulders[bi].routes.push({ letter: "", name: "", grade: "", style: "", note: "", unsure: false, included: true });
+    renderOcrRows(bi);
+  });
+  $("#ocrSource").oninput = () => { $("#ocrSave").disabled = !$("#ocrSource").value.trim(); };
+  $("#ocrSave").onclick = () => saveOcrToBook($("#ocrSource").value.trim());
+}
+function renderOcrRows(bi) {
+  const b = ocrResult.boulders[bi];
+  const el = $("#ocrRows-" + bi);
+  el.innerHTML = b.routes.map((r, ri) => `
+    <div class="row ocrRow${r.unsure ? " unsure" : ""}" data-ri="${ri}">
+      <input type="checkbox" class="ocrInc" ${r.included === false ? "" : "checked"} title="Zahrnout při uložení">
+      <input type="text" class="sm" data-f="letter" value="${esc(r.letter)}" style="width:34px" placeholder="písm.">
+      <input type="text" class="sm" data-f="name" value="${esc(r.name)}" style="flex:2" placeholder="název">
+      <input type="text" class="sm" data-f="grade" value="${esc(r.grade)}" style="width:52px" placeholder="stupeň">
+      <input type="text" class="sm" data-f="style" value="${esc(r.style)}" style="width:44px" placeholder="SD/CH">
+      <input type="text" class="sm" data-f="note" value="${esc(r.note)}" style="flex:2" placeholder="pozn.">
+      <button class="sm ocrDelRow">✕</button>
+    </div>`).join("") || `<p class="hint">Žádné řádky.</p>`;
+  el.querySelectorAll("[data-ri]").forEach(row => {
+    const ri = +row.dataset.ri;
+    row.querySelectorAll("input[data-f]").forEach(inp => inp.onchange = () => { b.routes[ri][inp.dataset.f] = inp.value; });
+    row.querySelector(".ocrInc").onchange = e => { b.routes[ri].included = e.target.checked; };
+    row.querySelector(".ocrDelRow").onclick = () => { b.routes.splice(ri, 1); renderOcrRows(bi); };
+  });
+}
+/* Book entries mirror the ROUTES shape closely enough for routesPanel() to
+   merge them, keyed "sector|boulder name" — a boulder with no sector typed in
+   is skipped and named in the toast rather than guessed at and silently
+   mis-filed under the wrong rock. */
+function saveOcrToBook(source) {
+  if (!source) return;
+  const el = $("#ocrReview");
+  let saved = 0, skipped = [];
+  ocrResult.boulders.forEach((b, bi) => {
+    const sector = el.querySelector(`.ocrSector[data-bi="${bi}"]`).value.trim();
+    if (!sector) { skipped.push(b.name || "(bez názvu)"); return; }
+    let lastLetter = "";
+    const routes = b.routes.filter(r => r.included !== false && (r.letter || r.name)).map(r => {
+      const row = { letter: r.letter, name: r.name, grade: r.grade, style: r.style, note: r.note, unsure: !!r.unsure };
+      if (r.letter) lastLetter = r.letter; else row.variantOf = lastLetter;
+      return row;
+    });
+    S.book[sector + "|" + b.name] = {
+      code: b.code, page: ocrResult.page, src: source, at: new Date().toISOString().slice(0, 10),
+      gps: b._gpsLatLng || null, routes,
+    };
+    saved++;
+  });
+  save(); drawLists();
+  ocrResult = null; ocrPendingFile = null; $("#ocrPreviewWrap").style.display = "none"; renderOcrReview();
+  toast(saved
+    ? `Uloženo ${saved} boulder(ů) do knihovny${skipped.length ? ` — vynecháno bez sektoru: ${skipped.join(", ")}` : ""}`
+    : `Nic uloženo — chybí sektor u: ${skipped.join(", ")}`);
+}
+
 /* ------------------------------------------------------- offline downloads */
 const TILE_BYTES = 22000;     // rough per-tile average, for the pre-download estimate
 const MAX_TILES = 6000;       // a hard stop: past this you are scraping, not caching
@@ -2085,10 +2320,10 @@ $("#projFile").onchange = e => {
   e.target.value = "";
 };
 $("#wipe").onclick = () => {
-  if (!confirm("Delete all overlays, pins, sector positions, trips and locally stored images?")) return;
+  if (!confirm("Delete all overlays, pins, sector positions, trips, scanned book data and locally stored images?")) return;
   localStorage.removeItem(STORE);
   S = { center: { lat: HOME.lat, lng: HOME.lng }, zoom: HOME.zoom, layer: S.layer,
-        pins: [], topos: [], sectors: {}, seeded: [], mode: "home", trips: [], trip: null };
+        pins: [], topos: [], sectors: {}, seeded: [], mode: "home", trips: [], trip: null, book: {} };
   normaliseState();
   for (const [id] of topoImgs) removeTopoImg(id);
   activeTopo = null; osmFeats = []; draw();

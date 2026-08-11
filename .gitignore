@@ -4,3 +4,4 @@
 
 # local env vars for `vercel env pull` (API keys, shared secret) — never commit these
 .env*.local
+node_modules/
