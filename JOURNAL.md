@@ -1,3 +1,21 @@
+## 2026-08-11 — přeskupení postranního panelu do dvou skupin
+
+- **Co:** 10 plochých `<details>` sekcí v panelu přeskupeno do dvou
+  `<div class="pgroup">` s popiskem: „V poli / na výletě“ (Trip planning,
+  Cíle výletu, How to use, Scan guidebook, Pins & export) a „Nastavení mapy —
+  jednou“ (Sector index, Base map, Topo overlays, Offline maps, Real climbing
+  data). Base map a Topo overlays už se ve výchozím stavu nerozbalují (Home
+  mode teď má rozbalené jen Trip planning a How to use). V Trip planning
+  přidáno tlačítko „+ Přidat cíl (Sector index)“ — otevře Sector index,
+  scrollne na něj, krátce ho zvýrazní outline a předrozbalí seznamy cest
+  u sektorů aktivního výletu, aby bylo tlačítko **+** u cesty hned vidět.
+- **Stav:** Hotovo, odzkoušeno v prohlížeči (Home/Crag mode, vytvoření
+  výletu se sektorem, klik na nové tlačítko), commit `7743a67`.
+- **Další:** Zbytek UI/UX cleanupu z plánu (`go-thru-the-current-woolly-melody.md`)
+  je mimo scope této session — sjednocení stylu route karet, náhrada
+  `prompt()`/`confirm()`, ambiguous locate button, mixed EN/CZ text,
+  vnořený scroll trap, a rozdělení `index.html` na moduly.
+
 ## 2026-08-11 — trip planning + OCR skenování knihy
 
 - **Co:** Pět kroků najednou (samostatné commity): (1) obrázky topo overlayů
