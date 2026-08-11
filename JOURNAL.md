@@ -1,3 +1,37 @@
+## 2026-08-11 — sjednocené vykreslování cesty/cíle (routeCard)
+
+- **Co:** Cesta se dřív vykreslovala 4 různě: Sector index (`.rt` span),
+  Trip planning (`.item`), Cíle výletu (`.item.goalrow`), OCR review
+  (`.ocrRow`, beze změny — zůstává editovatelný formulář nad neověřenými
+  daty, mimo rozsah). První tři teď jedou přes jedno `RouteView` + tři
+  adaptéry (`rvFromChs`/`rvFromBook`/`rvFromGoal`) + jeden `fmtRoute`/
+  `routeCard`. Zavřená mezera: naskenované cesty z knihy dřív nemely v
+  Sector indexu tlačítko **+** na přidání cíle vůbec — teď mají, přes nový
+  `src:"chs"|"book"` na cíli a `goalKey()` pro deduplikaci (ČHS cesta se
+  identifikuje indexem v tabulce, knižní cesta normalizovaným názvem — bez
+  `goalKey()` by se druhá knižní cesta na stejném bloku tvářila jako
+  duplicita první). `resolveGoal()` má nově i knižní větev.
+  `data-done`/`data-cdone` sjednoceno na `data-goaldone` + `bindGoalRows()`
+  + `syncGoalDone()` — zaškrtnutí cíle v jednom seznamu se ihned promítne
+  do druhého (oba se renderují pořád, jen tab schová jeden). Za běhu se
+  ukázala reálná chyba v původním plánu: `fmtRoute` dával stupeň/tagy do
+  stejného `.nm` spanu, který se u dlouhého názvu bloku ořezává ellipsis —
+  stupeň by tak u dlouhých názvů zmizel. Oprava: `fmtRoute` vrací
+  `{name, meta}`, `meta` (stupeň, styl, tagy) jde jako sourozenec `.nm`,
+  ne dovnitř.
+- **Stav:** Ověřeno v prohlížeči: ČHS cesta add/done/delete s daty z doby
+  před změnou (migrace `src`/`ri` v `normaliseState()`), knižní cesta se
+  stupňovým nesouladem vůči ČHS i s `?` (unsure) tagem, varianta (bez
+  písmene, odsazená), knižní blok bez ČHS páru (extraBlocks, GPS tlačítko),
+  ČHS i knižní cíl na stejném bloku bez falešné deduplikace, zaškrtnutí
+  cíle v Doma se ihned zobrazí v Na skále, „Highlight easy routes"
+  přepínač. Bez chyb v konzoli. `.rt`/`.goalrow .letter`/`.goalrow .grade`
+  CSS smazáno (nahrazeno `.routecard` rodinou).
+- **Další:** Fáze 2+3 plánu (`~/.claude/plans/go-thru-the-current-woolly-melody.md`)
+  jsou hotové. Zbývá volitelně: fyzicky přeuspořádat `<details>` bloky
+  podle pořadí v tabech (kosmetika, ne funkční), a časem zvážit rozdělení
+  monolitu na moduly.
+
 ## 2026-08-11 — 3 taby nahradily přepínač Doma/Na skále + skupiny
 
 - **Co:** Radikálnější krok než minulé přeskupení do dvou `.pgroup` skupin —

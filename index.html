@@ -123,8 +123,6 @@
   /* Crag rows must be usable with cold fingers and no glasses on a phone in daylight. */
   .goalrow{padding:12px 10px;font-size:15px}
   .goalrow input[type=checkbox]{width:22px;height:22px;flex:none}
-  .goalrow .letter{display:inline-block;min-width:20px;font-weight:700;color:var(--accent2)}
-  .goalrow .grade{color:var(--accent);font-weight:600}
   .goalrow button.sm{padding:8px 12px;font-size:13px}
   .ocrRow{padding:3px 2px}
   .ocrRow.unsure{background:#3a2418;border-radius:4px}
@@ -173,13 +171,23 @@
   .routebox .bn{font-weight:600;color:var(--ink);font-size:11.5px;text-decoration:none}
   .routebox a.bn:hover{color:var(--accent2);text-decoration:underline}
   .routebox .bn .h{color:var(--dim);font-weight:400;font-size:10px;margin-left:5px}
-  .routebox .rt{color:var(--dim);font-size:11px;margin-right:2px}
-  .routebox .rt b{color:var(--ink);font-weight:600}
-  .routebox .rt.easy,.routebox .rt.easy b{color:var(--ok)}
-  .routebox .rt.easy i{color:var(--dim);font-style:normal}
   .routebox .norts{color:var(--dim);font-size:11px;font-style:italic}
   .routebox .b > .h{color:var(--dim);font-weight:400;font-size:10px;margin-left:5px}
   .routebox .src{color:var(--dim);font-size:10.5px;margin-top:2px;padding-top:6px;border-top:1px solid var(--line)}
+
+  /* One route, two densities. `inline` is the sector index — hundreds of
+     routes must fit a 260px scroller — plain `.item` is a tappable row.
+     Nothing else about a route's markup differs between them. */
+  .routecard .rcl{font-weight:700;color:var(--accent2)}
+  .routecard .rcb{color:var(--dim)}
+  .routecard .tag.warn{color:var(--bad);border-color:#5c3430}
+  .routecard.inline{color:var(--dim);font-size:11px;margin-right:2px}
+  .routecard.inline b{color:var(--ink);font-weight:600}
+  .routecard.inline .nm{display:inline}
+  .routecard.inline.variant{margin-left:14px}
+  .routecard.item .rcg{color:var(--accent);font-weight:600}
+  .routecard.easy,.routecard.easy b,.routecard.easy .rcg{color:var(--ok)}
+  .routecard.easy i{color:var(--dim);font-style:normal}
 
   /* ---------- hud ---------- */
   #hud{position:absolute;left:12px;bottom:12px;z-index:15;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
@@ -650,6 +658,12 @@ function normaliseState() {
     if (!Array.isArray(t.sectors)) t.sectors = [];
     if (!Array.isArray(t.goals)) t.goals = [];
     if (typeof t.approach !== "string") t.approach = "";
+    // Goals saved before src/goalKey() existed are all ČHS-sourced catalog
+    // index goals — that was the only kind that could exist back then.
+    for (const g of t.goals) {
+      if (g.src !== "book") g.src = "chs";
+      if (!Number.isInteger(g.ri)) g.ri = -1;
+    }
   }
   if (typeof S.trip !== "string" || !S.trips.some(t => t.id === S.trip))
     S.trip = S.trips[0]?.id || null;
@@ -1507,6 +1521,102 @@ function easyGrade(g) {
   const m = /^([0-9])/.exec(g || "");
   return !!m && +m[1] <= 5;
 }
+
+/* ---------------------------------------------------------- route cards */
+/* Four places used to each spell out "how does a route read" in their own
+   string concatenation, and drifted — letter shown here, add-button there,
+   nobody agreeing on grade styling, book routes with no + at all. Everything
+   now goes through one shape (RouteView), one formatter, and one card; a
+   caller's only freedoms are the display flags and what it puts in the
+   action slots (`lead`, `actions`). */
+const RV = o => ({ name:"", grade:"", letter:"", style:"", note:"", boulder:"",
+                   sector:"", unsure:false, variant:false, chsGrade:"", detached:false, ...o });
+
+/* ČHS catalogue route: an [name, grade, note] tuple. The note is guidebook
+   provenance, only meaningful in the "extra info" mode. */
+function rvFromChs(r, sector, boulder) {
+  const easy = highlightEasy && easyGrade(r[1]);
+  return RV({ name: r[0], grade: r[1] || "", note: easy ? (r[2] || "") : "", sector, boulder });
+}
+/* Book row. A ČHS row for the same name is REPLACED by this one, but a
+   genuine grade disagreement is surfaced rather than silently overwritten. */
+function rvFromBook(r, chsBoulder, sector, boulder) {
+  const chs = chsBoulder && chsBoulder.r.find(cr => norm(cr[0]) === norm(r.name));
+  const disagree = chs && chs[1] && r.grade && norm(chs[1]) !== norm(r.grade);
+  return RV({ name: r.name, grade: r.grade || "", letter: r.letter || "", style: r.style || "",
+              note: r.note || "", unsure: !!r.unsure, variant: !r.letter,
+              chsGrade: disagree ? chs[1] : "", sector, boulder });
+}
+/* Trip goal. The book knows letters, ČHS doesn't — prefer a scan when one
+   covers this route, same as the crag list already did on its own. */
+function rvFromGoal(g) {
+  const bookRoute = S.book[g.sector + "|" + g.boulder]?.routes.find(r => norm(r.name) === norm(g.route));
+  const res = resolveGoal(g);
+  return RV({ name: g.route, grade: g.grade || "", boulder: g.boulder, sector: g.sector,
+              letter: bookRoute?.letter || g.letter || "", detached: !res || !res.r });
+}
+
+/* The single place that decides how a route reads. `name` is the part that
+   truncates with the boulder/route text (long names are common); `meta` is
+   grade/style/tags, which must stay visible even when `name` is cut short —
+   a card whose grade disappears behind an ellipsis is worse than the four
+   inconsistent renderings this replaces. */
+function fmtRoute(v, o = {}) {
+  const name = [];
+  if (o.letter && v.letter) name.push(`<span class="rcl">${esc(v.letter)})</span>`);
+  if (o.boulder && v.boulder) name.push(`<span class="rcb">${esc(v.boulder)} —</span>`);
+  name.push(`<b>${esc(v.name)}</b>`);
+  const meta = [];
+  meta.push(`<span class="rcg">${esc(v.grade || "—")}</span>`);
+  if (v.style) meta.push(`<i>${esc(v.style)}</i>`);
+  if (v.chsGrade) meta.push(`<span class="tag" title="ČHS uvádí jinou hodnotu">ČHS: ${esc(v.chsGrade)}</span>`);
+  if (v.note) meta.push(`<i>(${esc(v.note)})</i>`);
+  if (v.unsure) meta.push(`<span class="tag warn" title="OCR si nebyl jistý">?</span>`);
+  if (v.detached) meta.push(`<span class="tag warn">${esc(o.detachedLabel || "chybí ve zdroji")}</span>`);
+  return { name: name.join(" "), meta: meta.join(" ") };
+}
+
+/* One row of route for every caller. `lead` is the leading control (a
+   checkbox), `actions` the trailing buttons; the body never asks who called.
+   Inline density (sector index) joins name+meta into one span, same as the
+   old .rt spans — nothing there ever truncated. Card density (goal lists)
+   keeps meta as siblings of the truncating .nm, so grade/tags survive a long
+   boulder name instead of vanishing behind its ellipsis. */
+function routeCard(v, o = {}) {
+  const inline = o.density === "inline";
+  const cls = ["routecard", inline ? "inline" : "item"];
+  if (o.cls) cls.push(o.cls);
+  if (o.easy) cls.push("easy");
+  if (inline && v.variant) cls.push("variant");
+  const { name, meta } = fmtRoute(v, o);
+  if (inline) return `<span class="${cls.join(" ")}"><span class="nm">${name} ${meta}</span>${(o.actions || []).join("")}</span>`;
+  return `<div class="${cls.join(" ")}">${o.lead || ""}<span class="nm">${name}</span>${meta}${(o.actions || []).join("")}</div>`;
+}
+
+/* Action-slot builders — shared so the two done-checkboxes cannot drift again. */
+const acDone = g => `<input type="checkbox" data-goaldone="${esc(g.id)}"${g.done ? " checked" : ""}>`;
+const acDel  = g => `<button class="sm" data-delgoal="${esc(g.id)}" title="Odebrat cíl">✕</button>`;
+const acMap  = g => `<button class="sm" data-gotogoal="${esc(g.id)}">Na mapu</button>`;
+const acAdd  = v => v.name
+  ? `<button class="sm addGoal" data-sector="${esc(v.sector)}" data-boulder="${esc(v.boulder)}"` +
+    ` data-ri="${v.ri ?? -1}" data-route="${esc(v.name)}" data-grade="${esc(v.grade)}"` +
+    ` data-letter="${esc(v.letter)}" data-src="${esc(v.src || "chs")}" title="Přidat jako cíl výletu">+</button>`
+  : "";
+
+/* Both goal lists render at once (only CSS/tabs hide one), so a tick in one
+   must land on its twin without a drawTrip() that would wipe whatever is
+   half-typed in the approach note or the add-sector field. */
+function syncGoalDone(id, on) {
+  document.querySelectorAll(`[data-goaldone="${id}"]`).forEach(cb => { cb.checked = on; });
+}
+function bindGoalRows(el, trip) {
+  el.querySelectorAll("[data-goaldone]").forEach(cb => cb.onchange = () => {
+    const g = trip.goals.find(g => g.id === cb.dataset.goaldone);
+    if (!g) return;
+    g.done = cb.checked; save(); syncGoalDone(g.id, cb.checked);
+  });
+}
+
 /* Book entries for one sector, keyed "sector|boulder" in S.book. */
 function bookEntriesFor(n) {
   const prefix = n + "|";
@@ -1531,17 +1641,14 @@ function compactPages(pages) {
    it — but the ČHS value is kept and shown as a small marker on disagreement,
    so deleting a scan restores what was there before and a genuine source
    discrepancy isn't silently erased. Variants (letter:"") render indented. */
-function renderBookRoutes(bk, chsBoulder) {
+function renderBookRoutes(bk, chsBoulder, sector) {
   return bk.routes.map(r => {
-    const chs = chsBoulder && chsBoulder.r.find(cr => norm(cr[0]) === norm(r.name));
-    const disagree = chs && chs[1] && r.grade && norm(chs[1]) !== norm(r.grade);
-    const easy = highlightEasy && easyGrade(r.grade);
-    const label = `${r.letter ? esc(r.letter) + ") " : ""}<b>${esc(r.name)}</b> ${esc(r.grade || "—")}`;
-    const style = r.style ? ` <i>${esc(r.style)}</i>` : "";
-    const marker = disagree ? ` <span class="tag" title="ČHS uvádí jinou hodnotu">ČHS: ${esc(chs[1])}</span>` : "";
-    const note = r.note ? ` <i>(${esc(r.note)})</i>` : "";
-    const unsure = r.unsure ? ` <span class="tag" style="color:var(--bad)">?</span>` : "";
-    return `<span class="rt${easy ? " easy" : ""}"${r.letter ? "" : ' style="margin-left:14px"'}>${label}${style}${marker}${note}${unsure}</span>`;
+    const v = rvFromBook(r, chsBoulder, sector, bk.boulder);
+    return routeCard(v, {
+      density: "inline", letter: true,
+      easy: highlightEasy && easyGrade(v.grade),
+      actions: [acAdd({ ...v, ri: -1, src: "book" })],
+    });
   }).join(" · ");
 }
 function renderBoulderBlock(n, b, bk) {
@@ -1555,15 +1662,17 @@ function renderBoulderBlock(n, b, bk) {
     ? ` <button class="sm placeBookGps" data-lat="${bk.gps.lat}" data-lng="${bk.gps.lng}" title="Umístit na mapu">GPS ↦</button>` : "";
   let rs;
   if (bk) {
-    rs = renderBookRoutes(bk, b) + gpsBtn;
+    rs = renderBookRoutes(bk, b, n) + gpsBtn;
   } else if (b.r.length) {
     // An entry with no routes is not an empty boulder — it is one whose route
     // list was never sourced. Say which, and list the rock names if we have them.
     rs = b.r.map((r, ri) => {
-      const easy = highlightEasy && easyGrade(r[1]);
-      const note = easy && r[2] ? ` <i>(${esc(r[2])})</i>` : "";
-      const add = `<button class="sm addGoal" data-sector="${esc(n)}" data-boulder="${esc(b.n)}" data-ri="${ri}" data-route="${esc(r[0])}" data-grade="${esc(r[1] || "")}" title="Přidat jako cíl výletu">+</button>`;
-      return `<span class="rt${easy ? " easy" : ""}"><b>${esc(r[0])}</b> ${esc(r[1] || "—")}${note}${add}</span>`;
+      const v = rvFromChs(r, n, b.n);
+      return routeCard(v, {
+        density: "inline",
+        easy: highlightEasy && easyGrade(v.grade),
+        actions: [acAdd({ ...v, ri, src: "chs" })],
+      });
     }).join(" · ");
   } else {
     rs = `<span class="norts">${b.k ? `skály: ${b.k.map(esc).join(" · ")}` : "jednotlivé cesty nejsou v datech"}</span>`;
@@ -1698,7 +1807,9 @@ function drawLists() {
   });
   $("#sectorList").querySelectorAll(".addGoal").forEach(b => b.onclick = e => {
     e.stopPropagation();
-    addGoal(b.dataset.sector, b.dataset.boulder, +b.dataset.ri, b.dataset.route, b.dataset.grade);
+    const d = b.dataset;
+    addGoal({ sector: d.sector, boulder: d.boulder, route: d.route, grade: d.grade || "",
+              letter: d.letter || "", ri: +d.ri, src: d.src || "chs" });
   });
 
   offAreas();   // a sector added or removed is an offline area gained or lost
@@ -1746,6 +1857,11 @@ document.querySelectorAll("[data-tabbtn]").forEach(b => b.onclick = () => setTab
    "unnamed", "projekt", "Varianta"...). If the index moved (data re-sourced)
    fall back to a name search before calling the goal detached. */
 function resolveGoal(g) {
+  if (g.src === "book") {
+    const bk = S.book[g.sector + "|" + g.boulder];
+    const r = bk && bk.routes.find(r => norm(r.name) === norm(g.route));
+    return r ? { bk, r } : null;   // deleting the scan is what detaches it
+  }
   const d = ROUTES[g.sector];
   const b = d && d.b.find(b => b.n === g.boulder);
   if (!b) return null;
@@ -1754,15 +1870,25 @@ function resolveGoal(g) {
   return { b, r: found || null };   // boulder still there; exact route may be gone
 }
 
-function addGoal(sector, boulder, ri, route, grade) {
+/* Goals come from two sources with different identities: a ČHS route is
+   identified by its index inside the boulder (names repeat — 6 collisions in
+   the data), a book route by its normalised name (the book has no stable
+   index, and re-scanning a page reorders nothing but adds rows). ri = -1 is
+   the "not an index" marker; goalKey() is the only code that knows this. */
+const goalKey = g => `${g.sector}|${g.boulder}|` + (g.ri >= 0 ? "r" + g.ri : "n" + norm(g.route));
+
+function addGoal(o) {
   const trip = S.trips.find(t => t.id === S.trip);
   if (!trip) return toast("Nejdřív vyber nebo vytvoř výlet");
-  if (trip.goals.some(g => g.sector === sector && g.boulder === boulder && g.ri === ri))
-    return toast("Tahle cesta už na výletu je");
-  trip.goals.push({ id: "g" + uid++, sector, boulder, route, ri, letter: "", grade: grade || "", done: false, photo: null });
-  if (!trip.sectors.includes(sector)) trip.sectors.push(sector);
+  const g = { id: "g" + uid++, sector: o.sector, boulder: o.boulder, route: o.route,
+              ri: Number.isInteger(o.ri) ? o.ri : -1, letter: o.letter || "",
+              grade: o.grade || "", src: o.src === "book" ? "book" : "chs",
+              done: false, photo: null };
+  if (trip.goals.some(x => goalKey(x) === goalKey(g))) return toast("Tahle cesta už na výletu je");
+  trip.goals.push(g);
+  if (!trip.sectors.includes(o.sector)) trip.sectors.push(o.sector);
   save(); drawTrip();
-  toast(`„${route}“ přidáno do ${trip.name}`);
+  toast(`„${o.route}“ přidáno do ${trip.name}`);
 }
 
 /* Everything below renders trip UI. It is called ONLY from explicit events
@@ -1801,20 +1927,10 @@ function renderTripGoals(trip) {
   }
   el.innerHTML = [...byBoulder.entries()].map(([key, goals]) => {
     const [sector, boulder] = key.split("|");
-    const rows = goals.map(g => {
-      const res = resolveGoal(g);
-      const detached = !res || !res.r;
-      return `<div class="item">
-        <input type="checkbox" data-done="${g.id}" ${g.done ? "checked" : ""}>
-        <span class="nm">${esc(g.route)} ${esc(g.grade || "")}${detached ? ' <span class="tag" style="color:var(--bad)">chybí ve zdroji</span>' : ""}</span>
-        <button class="sm" data-delgoal="${g.id}">✕</button>
-      </div>`;
-    }).join("");
+    const rows = goals.map(g => routeCard(rvFromGoal(g), { lead: acDone(g), actions: [acDel(g)] })).join("");
     return `<p class="hint" style="margin-top:8px"><b>${esc(boulder)}</b> — ${esc(sector)}</p>${rows}`;
   }).join("");
-  el.querySelectorAll("[data-done]").forEach(cb => cb.onchange = () => {
-    trip.goals.find(g => g.id === cb.dataset.done).done = cb.checked; save();
-  });
+  bindGoalRows(el, trip);
   el.querySelectorAll("[data-delgoal]").forEach(b => b.onclick = () => {
     trip.goals = trip.goals.filter(g => g.id !== b.dataset.delgoal);
     save(); drawTrip();
@@ -1825,24 +1941,11 @@ function drawCragGoals() {
   const trip = S.trips.find(t => t.id === S.trip);
   if (!trip) { el.innerHTML = `<p class="hint">Žádný vybraný výlet. Přepni na kartu Výlet a vyber nebo vytvoř výlet.</p>`; return; }
   if (!trip.goals.length) { el.innerHTML = `<p class="hint">Tento výlet nemá žádné cíle.</p>`; return; }
-  el.innerHTML = trip.goals.map(g => {
-    const res = resolveGoal(g);
-    const detached = !res || !res.r;
-    // The book knows letters, ČHS doesn't — use it when a scan has this route.
-    const bookRoute = S.book[g.sector + "|" + g.boulder]?.routes.find(r => norm(r.name) === norm(g.route));
-    const letter = bookRoute?.letter || g.letter || "";
-    return `<div class="item goalrow">
-      <input type="checkbox" data-cdone="${g.id}" ${g.done ? "checked" : ""}>
-      <span class="letter">${esc(letter)}</span>
-      <span class="nm">${esc(g.boulder)} — ${esc(g.route)}</span>
-      <span class="grade">${esc(g.grade || "")}</span>
-      ${detached ? '<span class="tag" style="color:var(--bad)">chybí</span>' : ""}
-      <button class="sm" data-gotogoal="${g.id}">Na mapu</button>
-    </div>`;
-  }).join("");
-  el.querySelectorAll("[data-cdone]").forEach(cb => cb.onchange = () => {
-    trip.goals.find(g => g.id === cb.dataset.cdone).done = cb.checked; save();
-  });
+  el.innerHTML = trip.goals.map(g => routeCard(rvFromGoal(g), {
+    cls: "goalrow", letter: true, boulder: true, detachedLabel: "chybí",
+    lead: acDone(g), actions: [acMap(g)],
+  })).join("");
+  bindGoalRows(el, trip);
   el.querySelectorAll("[data-gotogoal]").forEach(b => b.onclick = () => {
     const g = trip.goals.find(g => g.id === b.dataset.gotogoal);
     const c = S.sectors[g.sector];
